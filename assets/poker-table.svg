@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400">
+  <defs>
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8a5a35"/>
+      <stop offset="55%" stop-color="#6b4225"/>
+      <stop offset="100%" stop-color="#4a2c18"/>
+    </linearGradient>
+    <linearGradient id="rail" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#a06a3c"/>
+      <stop offset="100%" stop-color="#5c3821"/>
+    </linearGradient>
+    <radialGradient id="felt" cx="50%" cy="32%" r="85%">
+      <stop offset="0%" stop-color="#6d1526"/>
+      <stop offset="55%" stop-color="#520f1d"/>
+      <stop offset="100%" stop-color="#3a0a14"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fff6ee" stop-opacity=".14"/>
+      <stop offset="45%" stop-color="#fff6ee" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- drop shadow -->
+  <rect x="6" y="14" width="588" height="376" rx="188" fill="#000" opacity=".35"/>
+  <!-- wood rail (rectangular with fully rounded left/right ends, like a real poker table) -->
+  <rect x="2" y="2" width="596" height="380" rx="190" fill="url(#wood)" stroke="#2d1a0f" stroke-width="3"/>
+  <rect x="20" y="18" width="560" height="348" rx="174" fill="url(#rail)"/>
+  <!-- inner groove -->
+  <rect x="42" y="36" width="516" height="312" rx="156" fill="#3a2212"/>
+  <!-- felt playing surface -->
+  <rect x="50" y="42" width="500" height="300" rx="150" fill="url(#felt)"/>
+  <rect x="50" y="42" width="500" height="300" rx="150" fill="none" stroke="#f3c65a" stroke-opacity=".3" stroke-width="2"/>
+  <!-- light sheen across the top of the felt -->
+  <rect x="50" y="42" width="500" height="190" rx="95" fill="url(#sheen)"/>
+</svg>
