@@ -251,6 +251,13 @@ function renderNav(route) {
     const tab = t.dataset.tab;
     t.classList.toggle('active', tab === route || (tab === 'lig' && onLig));
   });
+  // On phones the tab row scrolls sideways; keep the active tab in view.
+  const tabsEl = document.querySelector('.tabs');
+  const activeTab = tabsEl.querySelector('.tab.active');
+  if (activeTab && tabsEl.scrollWidth > tabsEl.clientWidth) {
+    const a = activeTab.getBoundingClientRect(), t = tabsEl.getBoundingClientRect();
+    if (a.left < t.left || a.right > t.right) tabsEl.scrollLeft += a.left - t.left - (t.width - a.width) / 2;
+  }
   const current = scopes.find(s => s.id === route);
   document.getElementById('lig-btn-label').textContent = current ? current.label : 'Ligler';
   document.getElementById('lig-menu').innerHTML = scopes.map(s =>
@@ -336,7 +343,7 @@ function renderBoard(scope) {
   const isAna = scope.type === 'ana';
   const main = S.sortPlayers(board.main, scope, sort.key, sort.dir);
   const below = S.sortPlayers(board.below, scope, sort.key, sort.dir);
-  const eyebrow = isAna ? 'Tüm zamanlar' : scope.current ? 'Güncel lig' : 'Geçmiş lig';
+  const eyebrow = isAna ? 'Tüm zamanlar' : `${scope.current ? 'Güncel lig' : 'Geçmiş lig'} · ${S.ligRange(scope.key)}`;
   const title = isAna ? 'Ana Tablo' : scope.label;
 
   const hero = `<section class="hero">
@@ -827,7 +834,7 @@ function gamesHTML(admin) {
     return `<tr class="${g.deleted ? 'deleted' : ''}">
         <td class="num">${g.id}</td>
         <td>${S.formatDate(g.date)}</td>
-        <td>${esc(S.ligKey(g.date).replace('-', '–'))}</td>
+        <td>${esc(S.ligShort(S.ligKey(g.date)))}</td>
         <td>${g.players.length}</td>
         <td class="order">${orderText(g.players.map(n => S.displayName(n, nk)))}${g.deleted ? ' <span class="tag dup">silindi</span>' : ''}</td>
         ${admin ? `<td>${acts}</td>` : ''}
@@ -949,7 +956,7 @@ function placeClass(place, n) {
 }
 
 const PLACE_TAG = { win: 'kazanan', second: '2.', third: '3.', loser: 'ilk kaybeden' };
-const PLACE_ICON = { win: '👑', second: '🥈', third: '🥉', loser: '💩' };
+const PLACE_ICON = { win: '👑', second: '🥈', third: '🥉', loser: '🍂' };
 
 function gameRankHTML(g, nk) {
   const n = g.players.length;
@@ -1056,12 +1063,12 @@ function renderOyunlar() {
 
   let body;
   if (gv === 'grid') {
-    const legend = `<div class="plegend"><span>👑 Kazanan</span><span>🥈 2.</span><span>🥉 3.</span><span>💩 İlk kaybeden</span></div>`;
+    const legend = `<div class="plegend"><span>👑 Kazanan</span><span>🥈 2.</span><span>🥉 3.</span><span>🍂 İlk kaybeden</span></div>`;
     body = `${legend}<div class="goyun-grid">${games.map(g => `
       <article class="gcard">
         <div class="gcard-head">
           <span class="gcard-date">${S.formatDate(g.date)}</span>
-          <span class="gcard-lig">${esc(S.ligLabel(S.ligKey(g.date)).replace('–', ' – '))}</span>
+          <span class="gcard-lig">${esc(S.ligLabel(S.ligKey(g.date)))}</span>
         </div>
         ${pokerTableHTML(g, nk)}
       </article>`).join('')}</div>`;
@@ -1216,7 +1223,7 @@ function renderYardim() {
     <section><h2>Sekmeler</h2>
       <dl class="defs">
         <dt>Ana Tablo</dt><dd>Bütün zamanların tablosu. Hiç sıfırlanmaz, açılışta toplam puana göre sıralıdır.</dd>
-        <dt>Ligler</dt><dd>Her lig 1 Ekim'de başlar, 30 Eylül'de biter. Yeni lig kendiliğinden açılır, geçmiş ligler menüde kalır. Açılışta lig puanına göre sıralıdır.</dd>
+        <dt>Ligler</dt><dd>Yılda iki lig oynanır: <strong>Kış Ligi</strong> 1 Ekim – 31 Mart, <strong>Yaz Ligi</strong> 1 Nisan – 30 Eylül. Yeni lig kendiliğinden açılır, geçmiş ligler menüde kalır. Açılışta lig puanına göre sıralıdır.</dd>
         <dt>Oyunlar</dt><dd>Oynanmış her oyunun tam sıralaması; tablo ya da kart görünümüyle. Kazanan ve ilk kaybeden işaretlenir.</dd>
         <dt>Yeni Veri</dt><dd>Oyuncular ve nickleri, maç kaydı, bütün oyunların listesi, CSV ve değişiklik geçmişi.</dd>
         <dt>Blindlar</dt><dd>Oyuncu sayısı, çipler ve hedef süreden başlangıç blind'larını ve ne zaman ne kadar artacaklarını hesaplar. Girdiğin değerler bu cihazda hatırlanır.</dd>

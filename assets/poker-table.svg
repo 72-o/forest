@@ -10,13 +10,13 @@
       <stop offset="100%" stop-color="#5c3821"/>
     </linearGradient>
     <radialGradient id="felt" cx="50%" cy="32%" r="85%">
-      <stop offset="0%" stop-color="#6d1526"/>
-      <stop offset="55%" stop-color="#520f1d"/>
-      <stop offset="100%" stop-color="#3a0a14"/>
+      <stop offset="0%" stop-color="#3f9a6c"/>
+      <stop offset="55%" stop-color="#2c7a52"/>
+      <stop offset="100%" stop-color="#1d5a3b"/>
     </radialGradient>
     <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#fff6ee" stop-opacity=".14"/>
-      <stop offset="45%" stop-color="#fff6ee" stop-opacity="0"/>
+      <stop offset="0%" stop-color="#fbf8ec" stop-opacity=".14"/>
+      <stop offset="45%" stop-color="#fbf8ec" stop-opacity="0"/>
     </linearGradient>
   </defs>
 
@@ -29,7 +29,7 @@
   <rect x="42" y="36" width="516" height="312" rx="156" fill="#3a2212"/>
   <!-- felt playing surface -->
   <rect x="50" y="42" width="500" height="300" rx="150" fill="url(#felt)"/>
-  <rect x="50" y="42" width="500" height="300" rx="150" fill="none" stroke="#f3c65a" stroke-opacity=".3" stroke-width="2"/>
+  <rect x="50" y="42" width="500" height="300" rx="150" fill="none" stroke="#ffd166" stroke-opacity=".3" stroke-width="2"/>
   <!-- light sheen across the top of the felt -->
   <rect x="50" y="42" width="500" height="190" rx="95" fill="url(#sheen)"/>
 </svg>

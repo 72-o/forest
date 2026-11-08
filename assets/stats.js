@@ -57,16 +57,31 @@ export function isValidISODate(iso) {
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
 
-// A league runs from 1 October to 30 September.
+// Two leagues a year: Kış Ligi runs 1 October – 31 March, Yaz Ligi 1 April – 30 September.
+// The key is the league's first month ("2026-10", "2027-04"), so keys sort chronologically.
 export function ligKey(iso) {
   const y = Number(iso.slice(0, 4));
   const m = Number(iso.slice(5, 7));
-  const start = m >= 10 ? y : y - 1;
-  return `${start}-${String((start + 1) % 100).padStart(2, '0')}`;
+  if (m >= 10) return `${y}-10`;
+  if (m <= 3) return `${y - 1}-10`;
+  return `${y}-04`;
+}
+
+// Short name, e.g. "Kış 2026–27" or "Yaz 2027".
+export function ligShort(key) {
+  const y = Number(key.slice(0, 4));
+  return key.endsWith('-10') ? `Kış ${y}–${String((y + 1) % 100).padStart(2, '0')}` : `Yaz ${y}`;
+}
+
+// Month span, e.g. "Ekim 2026 – Mart 2027".
+export function ligRange(key) {
+  const y = Number(key.slice(0, 4));
+  return key.endsWith('-10') ? `Ekim ${y} – Mart ${y + 1}` : `Nisan – Eylül ${y}`;
 }
 
 export function ligLabel(key) {
-  return `${key.replace('-', '–')} Ligi`;
+  const y = Number(key.slice(0, 4));
+  return key.endsWith('-10') ? `Kış Ligi ${y}–${String((y + 1) % 100).padStart(2, '0')}` : `Yaz Ligi ${y}`;
 }
 
 // ---------- games and scopes ----------

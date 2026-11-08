@@ -6,7 +6,7 @@
 <title>Forest Ligi · görsel</title>
 <link rel="stylesheet" href="assets/fonts.css">
 <link rel="stylesheet" href="assets/card.css">
-<style>html, body { margin: 0; background: #3d0914; }</style>
+<style>html, body { margin: 0; background: #23573f; }</style>
 </head>
 <body>
 <div id="card" class="card" lang="tr"></div>
@@ -25,8 +25,8 @@ try {
   el.innerHTML = cardHTML(S.buildBoard(S.gamesFor(db, scope), scope, S.nickMap(db)));
   const sample = 'Forest Ligi İĞŞıçöü 0123456789%';
   await Promise.all([
-    '700 34px "Big Shoulders Display"', '800 60px "Big Shoulders Display"', '900 132px "Big Shoulders Display"',
-    '500 27px Barlow', '600 35px Barlow', '700 20px Barlow',
+    '600 34px Fredoka', '700 60px Fredoka', '700 132px Fredoka',
+    '500 27px Nunito', '600 35px Nunito', '700 20px Nunito',
   ].map(f => document.fonts.load(f, sample)));
   await document.fonts.ready;
   layoutCard(el);
