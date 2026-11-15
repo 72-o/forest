@@ -5,13 +5,15 @@
     {"name":"Altay"},
     {"name":"Orhan"},
     {"name":"Aslı"},
-    {"name":"Lara"}
+    {"name":"Lara"},
+    {"name":"Coşkun"}
   ],
   "games": [],
   "log": [
     {"at":"2026-11-10T12:20:56.845Z","action":"player-add","after":{"name":"Altay","nick":""}},
     {"at":"2026-11-10T12:21:01.836Z","action":"player-add","after":{"name":"Orhan","nick":""}},
     {"at":"2026-11-10T12:21:07.390Z","action":"player-add","after":{"name":"Aslı","nick":""}},
-    {"at":"2026-11-10T12:21:11.388Z","action":"player-add","after":{"name":"Lara","nick":""}}
+    {"at":"2026-11-10T12:21:11.388Z","action":"player-add","after":{"name":"Lara","nick":""}},
+    {"at":"2026-11-15T13:18:57.205Z","action":"player-add","after":{"name":"Coşkun","nick":""}}
   ]
 }
