@@ -1,9 +1,9 @@
 // Shared by the site (browser) and the image build (Node). Pure functions only:
 // everything shown anywhere is derived from data/db.json through this file.
+//
+// One record ("game" in the data file) is one day: who worked how long, longest first.
 
-export const MIN_SHARE = 30;     // % of the board's games needed to enter the ranking
-export const MIN_QUALIFIED = 3;  // below this many qualified players, everyone is ranked
-export const MIN_PLAYERS = 3;    // smallest table we accept as a game
+export const MAX_DAY_MINUTES = 24 * 60;
 
 // ---------- names ----------
 
@@ -23,18 +23,55 @@ export function displayName(name, nicks) {
 
 // ---------- points ----------
 
-// Points scale with table size so winning a bigger game is worth more: 1st = oyuncu sayısı,
-// 2nd = oyuncu sayısı − 2, 3rd = oyuncu sayısı − 4 (never below 0), everyone else gets nothing.
-export function pointsFor(place, tableSize) {
-  if (place === 1) return tableSize;
-  if (place === 2) return Math.max(0, tableSize - 2);
-  if (place === 3) return Math.max(0, tableSize - 4);
-  return 0;
+// The points system lives in db.settings.points: points per finishing place, best first.
+// [1] means only the day's winner scores, and gets 1 point. Editable on the Ayarlar page.
+export const DEFAULT_POINTS = [1];
+export const MAX_POINT_PLACES = 6;
+export const MAX_POINT_VALUE = 99;
+
+// Anything malformed falls back to the default; trailing zeros carry no meaning and are dropped.
+export function normalizePoints(raw) {
+  if (!Array.isArray(raw) || !raw.length || raw.length > MAX_POINT_PLACES) return DEFAULT_POINTS.slice();
+  if (raw.some(x => !Number.isInteger(x) || x < 0 || x > MAX_POINT_VALUE)) return DEFAULT_POINTS.slice();
+  const out = raw.slice();
+  while (out.length > 1 && out[out.length - 1] === 0) out.pop();
+  return out[0] > 0 ? out : DEFAULT_POINTS.slice();
 }
 
-// The 4th-place finisher is the "ilk kaybeden" (first loser): first one just off the podium.
-export function isFirstLoser(place, tableSize) {
-  return place === 4 && tableSize >= 4;
+export function pointRules(db) {
+  return normalizePoints(db?.settings?.points);
+}
+
+export function pointsFor(place, rules = DEFAULT_POINTS) {
+  return rules[place - 1] || 0;
+}
+
+// One line for the share image and the history, e.g. "günün birincisi 1 puan" or "1. = 3 · 2. = 1".
+export function rulesText(rules) {
+  if (rules.length === 1) return `günün birincisi ${rules[0]} puan`;
+  return rules.map((p, i) => `${i + 1}. = ${p}`).join(' · ');
+}
+
+// ---------- durations ----------
+
+export function minutesOf(game, i) {
+  const m = Number(game.minutes?.[i]);
+  return Number.isFinite(m) && m > 0 ? Math.round(m) : 0;
+}
+
+// [{ value, unit }] parts of a duration: 330 → 5 sa 30 dk, 45 → 45 dk, 120 → 2 sa.
+export function durationParts(minutes) {
+  const total = Math.max(0, Math.round(minutes));
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  const parts = [];
+  if (h) parts.push({ value: h, unit: 'sa' });
+  if (m || !h) parts.push({ value: m, unit: 'dk' });
+  return parts;
+}
+
+export function fmtDuration(minutes) {
+  return durationParts(minutes).map(p => `${p.value} ${p.unit}`).join(' ');
 }
 
 // ---------- dates and leagues ----------
@@ -84,7 +121,7 @@ export function ligLabel(key) {
   return key.endsWith('-10') ? `Kış Ligi ${y}–${String((y + 1) % 100).padStart(2, '0')}` : `Yaz Ligi ${y}`;
 }
 
-// ---------- games and scopes ----------
+// ---------- days and scopes ----------
 
 export function activeGames(db) {
   return (db?.games || [])
@@ -93,7 +130,7 @@ export function activeGames(db) {
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id));
 }
 
-// Ana Tablo first, then every league that has games plus the current one, newest first.
+// Ana Tablo first, then every league that has days plus the current one, newest first.
 export function scopeList(db, today = todayISO()) {
   const current = ligKey(today);
   const keys = new Set(activeGames(db).map(g => ligKey(g.date)));
@@ -113,7 +150,7 @@ export function gamesFor(db, scope) {
   return scope.type === 'ana' ? all : all.filter(g => ligKey(g.date) === scope.key);
 }
 
-// The roster: registered players plus any name that appears in a game, with active game counts.
+// The roster: registered members plus any name that appears in a day, with active day counts.
 export function playerList(db) {
   const map = new Map();
   for (const p of db?.players || []) {
@@ -136,115 +173,47 @@ export function nickMap(db) {
   return out;
 }
 
-// ---------- rating (OpenSkill / Weng-Lin Plackett-Luce, one player per team) ----------
-
-const MU = 25;
-const SIGMA = MU / 3;
-const BETA = SIGMA / 2;
-const KAPPA = 0.0001;
-const TAU = MU / 300;
-const RATING_BASE = 1000;
-const RATING_SCALE = 40;
-
-// ratings: [{ mu, sigma }] in finishing order (index 0 won). Returns updated ratings.
-export function rateGame(ratings) {
-  const teams = ratings.map(r => ({ mu: r.mu, s2: r.sigma ** 2 + TAU ** 2 }));
-  const c = Math.sqrt(teams.reduce((a, t) => a + t.s2 + BETA ** 2, 0));
-  const e = teams.map(t => Math.exp(t.mu / c));
-  const sumQ = teams.map((_, q) => e.slice(q).reduce((a, b) => a + b, 0));
-  return teams.map((t, i) => {
-    let omega = 0;
-    let delta = 0;
-    for (let q = 0; q <= i; q++) {
-      const quotient = e[i] / sumQ[q];
-      omega += q === i ? 1 - quotient : -quotient;
-      delta += quotient * (1 - quotient);
-    }
-    const gamma = Math.sqrt(t.s2) / c;
-    return {
-      mu: t.mu + (t.s2 / c) * omega,
-      sigma: Math.sqrt(t.s2 * Math.max(1 - gamma * (t.s2 / c ** 2) * delta, KAPPA)),
-    };
-  });
-}
-
-export function displayRating(mu, sigma) {
-  return Math.round(RATING_BASE + RATING_SCALE * (mu - 3 * sigma));
-}
-
 // ---------- boards ----------
 
-// Games needed to enter a board's ranking, rounded up. Integer math keeps 30% of 10 at exactly 3.
-export function minGamesFor(gameCount) {
-  return Math.ceil(gameCount * MIN_SHARE / 100);
-}
-
-export function buildBoard(games, scope, nicks = {}) {
+// games: active days in date order. Each player gets the points, the total time worked and the
+// time per day. "Per day" divides by every recorded day since the player's first one in this
+// board, so a skipped day counts as zero but days before joining do not.
+export function buildBoard(games, scope, nicks = {}, rules = DEFAULT_POINTS) {
+  const dates = [...new Set(games.map(g => g.date))];
+  const dayIndex = new Map(dates.map((d, i) => [d, i]));
   const map = new Map();
-  const get = name => {
-    const k = nameKey(name);
-    if (!map.has(k)) {
-      map.set(k, { name: displayName(name, nicks), realName: cleanName(name), games: 0, p1: 0, p2: 0, p3: 0, pL: 0, points: 0, expected: 0, history: [], mu: MU, sigma: SIGMA });
-    }
-    return map.get(k);
-  };
 
   for (const g of games) {
-    const n = g.players.length;
-    const ps = g.players.map(get);
-    ps.forEach((p, i) => {
-      const place = i + 1;
-      const pts = pointsFor(place, n);
-      p.games++;
-      if (place === 1) p.p1++;
-      else if (place === 2) p.p2++;
-      else if (place === 3) p.p3++;
-      else if (isFirstLoser(place, n)) p.pL++;
-      p.points += pts;
-      p.expected += 1 / n;
-      p.history.push({ place, n, pts });
+    g.players.forEach((name, i) => {
+      const k = nameKey(name);
+      if (!map.has(k)) {
+        map.set(k, { name: displayName(name, nicks), realName: cleanName(name), first: dayIndex.get(g.date), points: 0, minutes: 0 });
+      }
+      const p = map.get(k);
+      p.points += pointsFor(i + 1, rules);
+      p.minutes += minutesOf(g, i);
     });
-    const next = rateGame(ps.map(p => ({ mu: p.mu, sigma: p.sigma })));
-    ps.forEach((p, i) => { p.mu = next[i].mu; p.sigma = next[i].sigma; });
   }
 
-  const players = [...map.values()].map(p => {
-    const recent = p.history.slice(-5).reverse();
-    return {
-      name: p.name,
-      realName: p.realName,
-      games: p.games,
-      p1: p.p1,
-      p2: p.p2,
-      p3: p.p3,
-      pL: p.pL,
-      points: p.points,
-      winPct: p.p1 / p.games,
-      podiumPct: (p.p1 + p.p2 + p.p3) / p.games,
-      luck: p.p1 - p.expected,
-      form: recent.map(h => h.place),
-      formPts: recent.reduce((a, h) => a + h.pts, 0),
-      rating: displayRating(p.mu, p.sigma),
-    };
-  });
+  const players = [...map.values()].map(p => ({
+    name: p.name,
+    realName: p.realName,
+    points: p.points,
+    minutes: p.minutes,
+    days: dates.length - p.first,
+    perDay: p.minutes / (dates.length - p.first),
+  }));
 
-  const minGames = minGamesFor(games.length);
-  const qualified = players.filter(p => p.games >= minGames);
-  const fallback = players.length > 0 && qualified.length < MIN_QUALIFIED;
-  const main = fallback ? players : qualified;
-  const below = fallback ? [] : players.filter(p => p.games < minGames);
-
+  const lastGame = games[games.length - 1];
   return {
     scope,
-    gameCount: games.length,
+    rules,
+    dayCount: dates.length,
     playerCount: players.length,
-    minGames,
-    last: games.length
-      ? { ...games[games.length - 1], players: games[games.length - 1].players.map(n => displayName(n, nicks)) }
+    last: lastGame
+      ? { date: lastGame.date, players: lastGame.players.map(n => displayName(n, nicks)), minutes: lastGame.players.map((_, i) => minutesOf(lastGame, i)) }
       : null,
-    fallback,
-    main: sortPlayers(main, scope),
-    below: sortPlayers(below, scope),
+    players: sortPlayers(players),
   };
 }
 
@@ -252,37 +221,24 @@ export function buildBoard(games, scope, nicks = {}) {
 
 export const SORT_KEYS = {
   name: p => p.name,
-  games: p => p.games,
-  p1: p => p.p1,
-  p2: p => p.p2,
-  p3: p => p.p3,
-  pL: p => p.pL,
-  winPct: p => p.winPct,
-  podiumPct: p => p.podiumPct,
   points: p => p.points,
-  luck: p => p.luck,
-  form: p => p.formPts,
-  rating: p => p.rating,
+  minutes: p => p.minutes,
+  perDay: p => p.perDay,
 };
 
-export function defaultSortKey() {
-  return 'points';
-}
+export const DEFAULT_SORT = 'points';
 
-function tieBreaks(scope) {
-  return scope.type === 'ana'
-    ? [['winPct', -1], ['games', -1], ['podiumPct', -1], ['points', -1]]
-    : [['points', -1], ['p1', -1], ['p2', -1], ['p3', -1], ['games', 1]];
-}
+// Equal points: whoever worked longer comes first.
+const TIE_BREAKS = [['points', -1], ['minutes', -1]];
 
 function compare(a, b) {
   if (typeof a === 'string') return a.localeCompare(b, 'tr');
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-// dir: 'desc' or 'asc'. Ties fall back to the scope's default order, then the name.
-export function sortPlayers(list, scope, key = defaultSortKey(scope), dir = 'desc') {
-  const chain = [[key, dir === 'asc' ? 1 : -1], ...tieBreaks(scope)];
+// dir: 'desc' or 'asc'. Ties fall back to points, then total time, then the name.
+export function sortPlayers(list, key = DEFAULT_SORT, dir = 'desc') {
+  const chain = [[key, dir === 'asc' ? 1 : -1], ...TIE_BREAKS];
   return list.slice().sort((a, b) => {
     for (const [k, d] of chain) {
       const c = compare(SORT_KEYS[k](a), SORT_KEYS[k](b));
@@ -299,33 +255,22 @@ function csvCell(v) {
   return /[";\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-// One row per player per game. Semicolons and a BOM so Turkish Excel opens it cleanly.
-export function gamesCsv(games, nicks = {}) {
-  const rows = [['tarih', 'oyun_no', 'lig', 'sira', 'oyuncu', 'nick', 'oyuncu_sayisi', 'puan']];
+// One row per person per day. Semicolons and a BOM so Turkish Excel opens it cleanly.
+export function gamesCsv(games, nicks = {}, rules = DEFAULT_POINTS) {
+  const rows = [['tarih', 'lig', 'sira', 'isim', 'nick', 'sure_dakika', 'sure', 'puan']];
   for (const g of games) {
-    const n = g.players.length;
     g.players.forEach((name, i) => {
-      rows.push([formatDate(g.date), g.id, ligLabel(ligKey(g.date)), i + 1, name, nicks[nameKey(name)] || '', n, pointsFor(i + 1, n)]);
+      const min = minutesOf(g, i);
+      rows.push([formatDate(g.date), ligLabel(ligKey(g.date)), i + 1, name, nicks[nameKey(name)] || '', min, fmtDuration(min), pointsFor(i + 1, rules)]);
     });
   }
-  return '﻿' + rows.map(r => r.map(csvCell).join(';')).join('\r\n') + '\r\n';
+  return '\uFEFF' + rows.map(r => r.map(csvCell).join(';')).join('\r\n') + '\r\n';
 }
 
-// One player, game or log entry per line keeps the git history readable.
+// One member, day or log entry per line keeps the git history readable.
 export function serializeDb(db) {
   const list = arr => (arr.length ? '\n' + arr.map(x => '    ' + JSON.stringify(x)).join(',\n') + '\n  ' : '');
+  const settings = JSON.stringify({ points: pointRules(db) });
   const players = (db.players || []).map(p => (p.nick ? { name: p.name, nick: p.nick } : { name: p.name }));
-  return `{\n  "version": 1,\n  "players": [${list(players)}],\n  "games": [${list(db.games || [])}],\n  "log": [${list(db.log || [])}]\n}\n`;
-}
-
-// ---------- formatting ----------
-
-export function fmtPct(x) {
-  return `%${Math.round(x * 100)}`;
-}
-
-export function fmtSigned(x) {
-  const r = Math.round(x * 10) / 10;
-  const s = Math.abs(r).toFixed(1).replace('.', ',');
-  return r > 0 ? `+${s}` : r < 0 ? `−${s}` : '0';
+  return `{\n  "version": 1,\n  "settings": ${settings},\n  "players": [${list(players)}],\n  "games": [${list(db.games || [])}],\n  "log": [${list(db.log || [])}]\n}\n`;
 }

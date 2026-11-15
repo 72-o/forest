@@ -22,7 +22,7 @@ const el = document.getElementById('card');
 try {
   const db = await (await fetch(`data/db.json?t=${Date.now()}`, { cache: 'no-store' })).json();
   const scope = S.findScope(db, id, today) || S.findScope(db, 'ana', today);
-  el.innerHTML = cardHTML(S.buildBoard(S.gamesFor(db, scope), scope, S.nickMap(db)));
+  el.innerHTML = cardHTML(S.buildBoard(S.gamesFor(db, scope), scope, S.nickMap(db), S.pointRules(db)));
   const sample = 'Forest Ligi İĞŞıçöü 0123456789%';
   await Promise.all([
     '600 34px Fredoka', '700 60px Fredoka', '700 132px Fredoka',

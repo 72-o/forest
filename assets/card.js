@@ -1,5 +1,5 @@
 // Builds the share image markup for one board. Used by card.html (screenshotted by the build).
-import { MIN_SHARE, formatDate } from './stats.js';
+import { durationParts, formatDate, rulesText } from './stats.js';
 
 export const LEAGUE_NAME = 'Forest Ligi';
 export const SITE_URL = '72-o.github.io/forest';
@@ -10,49 +10,44 @@ export function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// "5 sa 30 dk" with the units set small, so the numbers carry the weight.
+export function durHTML(minutes) {
+  return `<span class="dur">${durationParts(minutes).map(p => `${p.value}<small>${p.unit}</small>`).join(' ')}</span>`;
+}
+
 export function cardHTML(board) {
   const isAna = board.scope.type === 'ana';
   const eyebrow = isAna ? 'Ana Tablo · Tüm zamanlar' : board.scope.label;
   const titleLines = LEAGUE_NAME.split(' ').map(esc).join('<br>');
   const head = `<header class="c-head">
       <div><div class="c-eyebrow">${esc(eyebrow)}</div><div class="c-title">${titleLines}</div></div>
-      <div class="c-count"><b>${board.gameCount}</b><span>oyun${board.last ? ` · son oyun ${formatDate(board.last.date)}` : ''}</span></div>
+      <div class="c-count"><b>${board.dayCount}</b><span>gün${board.last ? ` · son gün ${formatDate(board.last.date)}` : ''}</span></div>
     </header>`;
 
-  if (!board.gameCount) {
-    return `${head}<div class="c-empty">Henüz oyun yok</div>${foot(isAna)}`;
+  if (!board.dayCount) {
+    return `${head}<div class="c-empty">Henüz kayıt yok</div>${foot(board)}`;
   }
 
-  const last = board.last.players.map((n, i) => `<li><b>${i + 1}</b>${esc(n)}</li>`).join('');
+  const last = board.last.players.map((n, i) => `<li><b>${i + 1}</b>${esc(n)} ${durHTML(board.last.minutes[i])}</li>`).join('');
   const th = `<div class="c-th">
-      <span></span><span>Oyuncu</span><span class="c-g">Oyun</span>
-      ${[1, 2, 3].map(i => `<span class="c-m"><span class="mh" style="--c:${MEDALS[i - 1]}">${i}.</span></span>`).join('')}
-      <span class="c-s">Puan</span>
+      <span></span><span>İsim</span><span class="c-p">Puan</span><span class="c-d">Toplam</span><span class="c-d">Gün başına</span>
     </div>`;
-  const rows = board.main.map((p, i) => `<div class="c-row${i === 0 ? ' lead' : ''}">
+  const rows = board.players.map((p, i) => `<div class="c-row${i === 0 ? ' lead' : ''}">
       <span class="c-rank${i < 3 ? ' top' : ''}" style="--c:${MEDALS[i] || 'inherit'}">${i + 1}</span>
       <span class="c-name">${esc(p.name)}</span>
-      <span class="c-g">${p.games}</span>
-      ${[p.p1, p.p2, p.p3].map(x => `<span class="c-m${x ? '' : ' zero'}">${x || '–'}</span>`).join('')}
-      <span class="c-s">${p.points}</span>
+      <span class="c-p">${p.points}</span>
+      <span class="c-d">${durHTML(p.minutes)}</span>
+      <span class="c-d">${durHTML(p.perDay)}</span>
     </div>`).join('');
 
-  let note = '';
-  if (board.below.length) {
-    const list = board.below.map(p => `<span><b>${esc(p.name)}</b> ${p.games} oyun</span>`).join(' · ');
-    note = `<div class="c-note">Sıralamaya girmek için en az ${board.minGames} oyun: ${list}</div>`;
-  }
-
   return `${head}
-    <section class="c-last"><span class="c-last-label">Son oyun</span><ol class="c-last-list">${last}</ol></section>
+    <section class="c-last"><span class="c-last-label">Son gün</span><ol class="c-last-list">${last}</ol></section>
     <div class="c-table">${th}<div class="c-rows">${rows}</div></div>
-    ${note}
-    ${foot(isAna)}`;
+    ${foot(board)}`;
 }
 
-function foot(isAna) {
-  const rule = `Puan: 1. = N · 2. = N−2 · 3. = N−4 · diğer = 0 (N = oyuncu sayısı)${isAna ? ` · oyunların en az %${MIN_SHARE}'u` : ''}`;
-  return `<footer class="c-foot"><span><b>${SITE_URL}</b></span><span>${rule}</span></footer>`;
+function foot(board) {
+  return `<footer class="c-foot"><span><b>${SITE_URL}</b></span><span>Puan: ${esc(rulesText(board.rules))}</span></footer>`;
 }
 
 // Fit the rows into the space left by the header, strip and footer.

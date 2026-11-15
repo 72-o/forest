@@ -1,15 +1,11 @@
 import * as S from './stats.js';
-import * as B from './blinds.js';
-import { esc, LEAGUE_NAME } from './card.js';
+import { esc, durHTML, LEAGUE_NAME } from './card.js';
 
 const REPO = '72-o/forest';
 const DATA_PATH = 'data/db.json';
 const API = `https://api.github.com/repos/${REPO}`;
 const LS_TOKEN = 'forest.token';
-const LS_DETAIL = 'forest.detail';
-const LS_BLINDS = 'forest.blinds';
-const LS_GAMEVIEW = 'forest.gameview';
-const GAMES_PREVIEW = 20;
+const DAYS_PREVIEW = 20;
 const HISTORY_PREVIEW = 30;
 
 const view = document.getElementById('view');
@@ -21,34 +17,29 @@ const state = {
   loaded: false,
   loadError: null,
   sort: {},
-  detail: lsGet(LS_DETAIL) === '1',
   pendingData: null,   // blob sha of data/db.json the build has not caught up with yet
   pendingStuck: false,
   pollTimer: null,
   png: {},             // prefetched share images, keyed by scope id + data sha
   showDeleted: false,
-  gamesAll: false,
+  daysAll: false,
   historyAll: false,
   confirmDelete: null,
   playerEdit: null,    // key of the roster row being edited
   playerMsg: null,
   playerBusy: false,
   form: blankForm(),
-  blinds: loadBlinds(),
-  gamesView: lsGet(LS_GAMEVIEW) === 'table' ? 'table' : 'grid',
+  points: null,        // draft of the points system on the Ayarlar page
+  pointsMsg: null,
 };
 
 function emptyDb() {
   return { version: 1, players: [], games: [], log: [] };
 }
 
+// rows: one per person, in ranking order, with the hours and minutes as typed.
 function blankForm() {
-  return { editId: null, date: today, order: [], busy: false, msg: null };
-}
-
-function loadBlinds() {
-  const base = { players: 6, stack: 10000, unit: 25, hours: 3, start: '', depth: 100, speed: 'normal' };
-  try { return { ...base, ...JSON.parse(lsGet(LS_BLINDS) || '{}') }; } catch { return base; }
+  return { editId: null, date: today, rows: [], busy: false, msg: null };
 }
 
 // ---------- small helpers ----------
@@ -78,17 +69,12 @@ function fmtDateTime(iso) {
   return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-function orderText(players) {
-  const n = players.length;
-  return players.map((name, i) => {
-    const place = i + 1;
-    const tag = S.isFirstLoser(place, n) ? ' <span class="tag loser">ilk kaybeden</span>' : '';
-    return `<b>${place}.</b> ${esc(name)}${tag}`;
-  }).join(' &nbsp;');
-}
-
 function nicks() {
   return S.nickMap(state.db);
+}
+
+function rules() {
+  return S.pointRules(state.db);
 }
 
 function download(name, text, type) {
@@ -234,8 +220,8 @@ function render() {
   }
   if (route === 'yeni') return renderYeni();
   if (route === 'yardim') return renderYardim();
-  if (route === 'blind') return renderBlind();
-  if (route === 'oyunlar') return renderOyunlar();
+  if (route === 'gunler') return renderGunler();
+  if (route === 'ayarlar') return renderAyarlar();
   const scope = S.findScope(state.db, route, today);
   if (!scope) {
     view.innerHTML = `<div class="empty"><strong>Sayfa bulunamadı</strong><a href="#ana">Ana Tablo'ya dön</a></div>`;
@@ -278,6 +264,8 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(fals
 window.addEventListener('hashchange', () => {
   setMenu(false);
   state.confirmDelete = null;
+  state.points = null;
+  state.pointsMsg = null;
   render();
   window.scrollTo(0, 0);
 });
@@ -285,51 +273,28 @@ window.addEventListener('hashchange', () => {
 // ---------- board pages ----------
 
 const COLS = [
-  { key: 'games', label: 'Oyun', cell: p => p.games },
-  { key: 'p1', label: '1.', medal: 'var(--gold)', cell: p => p.p1, zero: p => !p.p1 },
-  { key: 'p2', label: '2.', medal: 'var(--silver)', cell: p => p.p2, zero: p => !p.p2 },
-  { key: 'p3', label: '3.', medal: 'var(--bronze)', cell: p => p.p3, zero: p => !p.p3 },
-  { key: 'pL', label: 'İlk kaybeden', detail: true, cell: p => p.pL, zero: p => !p.pL },
-  { key: 'winPct', label: 'Kazanma %', cell: p => S.fmtPct(p.winPct) },
-  { key: 'podiumPct', label: 'Podyum %', cell: p => S.fmtPct(p.podiumPct) },
-  { key: 'points', label: 'Lig puanı', cell: p => p.points },
-  { key: 'luck', label: 'Şans farkı', detail: true, cell: p => S.fmtSigned(p.luck), cls: p => (p.luck >= 0.05 ? 'pos' : p.luck <= -0.05 ? 'neg' : '') },
-  { key: 'form', label: 'Form', detail: true, cell: p => p.form.join('·'), cls: () => 'form' },
-  { key: 'rating', label: 'Rating', detail: true, cell: p => p.rating },
+  { key: 'points', label: 'Puan', cell: p => p.points },
+  { key: 'minutes', label: 'Toplam süre', cell: p => durHTML(p.minutes) },
+  { key: 'perDay', label: 'Gün başına', cell: p => durHTML(p.perDay) },
 ];
-const SORT_LABEL = { name: 'oyuncu adı', ...Object.fromEntries(COLS.map(c => [c.key, c.label.toLocaleLowerCase('tr')])) };
-
-// The page's main metric sits right after the medal columns, so it stays on screen on phones.
-function colsFor(scope) {
-  const main = S.defaultSortKey(scope);
-  const base = COLS.filter(c => ['games', 'p1', 'p2', 'p3'].includes(c.key));
-  return [...base, ...COLS.filter(c => c.key === main), ...COLS.filter(c => !base.includes(c) && c.key !== main)];
-}
+const SORT_LABEL = { name: 'isim', points: 'puan', minutes: 'toplam süre', perDay: 'gün başına süre' };
 
 function sortOf(scope) {
-  return state.sort[scope.id] || { key: S.defaultSortKey(scope), dir: 'desc' };
+  return state.sort[scope.id] || { key: S.DEFAULT_SORT, dir: 'desc' };
 }
 
-function boardTable(players, scope, ranked) {
+function boardTable(players, scope) {
   const sort = sortOf(scope);
-  const cols = colsFor(scope);
   const aria = key => (sort.key === key ? ` aria-sort="${sort.dir === 'asc' ? 'ascending' : 'descending'}"` : '');
-  const detFirst = i => cols[i].detail && !cols[i - 1].detail;
   const head = `<tr>
-      <th class="name" scope="col"${aria('name')}><span class="rk">#</span><button type="button" data-sort="name">Oyuncu</button></th>
-      ${cols.map((c, i) => `<th scope="col" class="${c.detail ? 'det' : ''}${detFirst(i) ? ' det-first' : ''}"${aria(c.key)}>
-        <button type="button" data-sort="${c.key}">${c.medal ? `<span class="mh" style="--c:${c.medal}">${c.label}</span>` : c.label}</button></th>`).join('')}
+      <th class="name" scope="col"${aria('name')}><span class="rk">#</span><button type="button" data-sort="name">İsim</button></th>
+      ${COLS.map(c => `<th scope="col"${aria(c.key)}><button type="button" data-sort="${c.key}">${c.label}</button></th>`).join('')}
     </tr>`;
-  const rows = players.map((p, i) => `<tr class="${ranked && i === 0 ? 'lead' : ''}">
-      <td class="name"><span class="rk${ranked && i < 3 ? ` r${i + 1}` : ''}">${ranked ? i + 1 : '–'}</span>${esc(p.name)}</td>
-      ${cols.map((c, j) => {
-        const isZero = c.zero && c.zero(p);
-        const cls = [c.detail ? 'det' : '', detFirst(j) ? 'det-first' : '', c.key === sort.key ? 'key' : '', isZero ? 'zero' : '', c.cls ? c.cls(p) : '']
-          .filter(Boolean).join(' ');
-        return `<td class="${cls}">${isZero ? '–' : c.cell(p)}</td>`;
-      }).join('')}
+  const rows = players.map((p, i) => `<tr class="${i === 0 ? 'lead' : ''}">
+      <td class="name"><span class="rk${i < 3 ? ` r${i + 1}` : ''}">${i + 1}</span>${esc(p.name)}</td>
+      ${COLS.map(c => `<td class="${c.key === sort.key ? 'key' : ''}">${c.cell(p)}</td>`).join('')}
     </tr>`).join('');
-  return `<div class="table-wrap"><table class="board${state.detail ? ' show-det' : ''}"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="board"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function fileBase(scope) {
@@ -338,47 +303,39 @@ function fileBase(scope) {
 
 function renderBoard(scope) {
   const games = S.gamesFor(state.db, scope);
-  const board = S.buildBoard(games, scope, nicks());
+  const board = S.buildBoard(games, scope, nicks(), rules());
   const sort = sortOf(scope);
   const isAna = scope.type === 'ana';
-  const main = S.sortPlayers(board.main, scope, sort.key, sort.dir);
-  const below = S.sortPlayers(board.below, scope, sort.key, sort.dir);
+  const players = S.sortPlayers(board.players, sort.key, sort.dir);
   const eyebrow = isAna ? 'Tüm zamanlar' : `${scope.current ? 'Güncel lig' : 'Geçmiş lig'} · ${S.ligRange(scope.key)}`;
   const title = isAna ? 'Ana Tablo' : scope.label;
 
   const hero = `<section class="hero">
       <div><p class="eyebrow">${eyebrow}</p><h1>${esc(title)}</h1></div>
       <dl class="kpis">
-        <div><dt>Oyun</dt><dd>${board.gameCount}</dd></div>
-        <div><dt>Oyuncu</dt><dd>${board.playerCount}</dd></div>
-        ${board.last ? `<div><dt>Son oyun</dt><dd class="date">${S.formatDate(board.last.date)}</dd></div>` : ''}
+        <div><dt>Gün</dt><dd>${board.dayCount}</dd></div>
+        <div><dt>Kişi</dt><dd>${board.playerCount}</dd></div>
+        ${board.last ? `<div><dt>Son gün</dt><dd class="date">${S.formatDate(board.last.date)}</dd></div>` : ''}
       </dl>
     </section>`;
 
-  if (!board.gameCount) {
-    view.innerHTML = `${hero}<div class="empty"><strong>Henüz oyun yok</strong>
-      ${isAna ? 'İlk oyun eklendiğinde tablo burada oluşur.' : 'Bu ligin ilk oyunu eklendiğinde tablo burada oluşur.'}
+  if (!board.dayCount) {
+    view.innerHTML = `${hero}<div class="empty"><strong>Henüz kayıt yok</strong>
+      ${isAna ? 'İlk gün kaydedildiğinde tablo burada oluşur.' : 'Bu ligin ilk günü kaydedildiğinde tablo burada oluşur.'}
       <br><a href="#yeni">Yeni Veri sekmesine git</a></div>`;
     return;
   }
 
-  const last = `<section class="last"><span class="last-label">Son oyun · ${S.formatDate(board.last.date)}</span>
-      <ol>${board.last.players.map((n, i) => `<li><b>${i + 1}</b>${esc(n)}</li>`).join('')}</ol></section>`;
+  const last = `<section class="last"><span class="last-label">Son gün · ${S.formatDate(board.last.date)}</span>
+      <ol>${board.last.players.map((n, i) => `<li><b>${i + 1}</b>${esc(n)} ${durHTML(board.last.minutes[i])}</li>`).join('')}</ol></section>`;
 
-  const sortedNote = sort.key === S.defaultSortKey(scope) && sort.dir === 'desc'
-    ? `Sıralama: ${isAna ? 'toplam puan' : 'lig puanı'}`
-    : `Sıralama: ${SORT_LABEL[sort.key]} · <button type="button" class="link" data-act="reset-sort">varsayılana dön</button>`;
+  const sortedNote = sort.key === S.DEFAULT_SORT && sort.dir === 'desc'
+    ? 'Sıralama: puan · başka bir sütuna göre sıralamak için başlığına dokun'
+    : `Sıralama: ${SORT_LABEL[sort.key]} · <button type="button" class="link" data-act="reset-sort">puana dön</button>`;
 
   view.innerHTML = `${hero}${last}${sharePanel(scope)}
-    <div class="toolbar">
-      <p class="sorted">${sortedNote}</p>
-      <button type="button" class="btn small toggle" data-act="detail" aria-expanded="${state.detail}">
-        <span class="chev" aria-hidden="true">▸</span>Detaylı istatistikler</button>
-    </div>
-    ${boardTable(main, scope, true)}
-    ${below.length ? `<section class="block"><div class="block-head"><h2>${board.minGames} oyundan az oynayanlar</h2></div>
-      <p class="dim" style="margin:0">En az ${board.minGames} oyun oynayınca sıralamaya girerler.</p>
-      ${boardTable(below, scope, false)}</section>` : ''}`;
+    <div class="toolbar"><p class="sorted">${sortedNote}</p></div>
+    ${boardTable(players, scope)}`;
 
   view.querySelectorAll('[data-sort]').forEach(b => b.addEventListener('click', () => {
     const key = b.dataset.sort;
@@ -388,11 +345,6 @@ function renderBoard(scope) {
     render();
   }));
   view.querySelector('[data-act="reset-sort"]')?.addEventListener('click', () => { delete state.sort[scope.id]; render(); });
-  view.querySelector('[data-act="detail"]').addEventListener('click', () => {
-    state.detail = !state.detail;
-    lsSet(LS_DETAIL, state.detail ? '1' : '0');
-    render();
-  });
   bindShare(scope, games);
 }
 
@@ -429,7 +381,7 @@ function sharePanel(scope) {
 
 function bindShare(scope, games) {
   const csvName = `${fileBase(scope)}.csv`;
-  const csv = () => S.gamesCsv(games, nicks());
+  const csv = () => S.gamesCsv(games, nicks(), rules());
   view.querySelector('[data-act="csv"]')?.addEventListener('click', () => download(csvName, csv(), 'text/csv;charset=utf-8'));
 
   const b = state.build;
@@ -465,12 +417,12 @@ function renderYeni() {
   const admin = !!token();
   view.innerHTML = `<section class="page-head">
       <p class="eyebrow">Veri</p><h1>Yeni Veri</h1>
-      <p class="lede">Önce oyuncuları ekle, sonra maçın sıralamasını kaydet. Ana Tablo ve ilgili lig hemen güncellenir, görseller 1–2 dakika içinde hazır olur.</p>
+      <p class="lede">Önce üyeleri ekle, sonra her gün için kimin ne kadar çalıştığını kaydet. Ana Tablo ve ilgili lig hemen güncellenir, görseller 1–2 dakika içinde hazır olur.</p>
     </section>
     ${admin ? '' : tokenHTML()}
     ${playersHTML(admin)}
     ${admin ? entryHTML() : ''}
-    ${gamesHTML(admin)}
+    ${daysHTML(admin)}
     ${historyHTML()}
     ${admin ? `<p class="token-line">Yönetici anahtarı bu tarayıcıda kayıtlı. <button type="button" class="link" data-act="forget-token">Anahtarı bu cihazdan kaldır</button></p>` : ''}`;
   if (admin) {
@@ -484,13 +436,13 @@ function renderYeni() {
   } else {
     bindToken();
   }
-  bindGames(admin);
+  bindDays(admin);
 }
 
 function tokenHTML() {
   return `<section class="panel">
       <h2>Yönetici anahtarı</h2>
-      <p class="dim" style="margin:10px 0 0">Oyuncu ve maç eklemek için bu cihazda bir kez yönetici anahtarını girmen gerekiyor. Anahtar sadece bu tarayıcıda saklanır. Nasıl alınacağı <a href="#yardim">Yardım</a> sekmesinde anlatılıyor.</p>
+      <p class="dim" style="margin:10px 0 0">Üye ve gün eklemek için bu cihazda bir kez yönetici anahtarını girmen gerekiyor. Anahtar sadece bu tarayıcıda saklanır. Nasıl alınacağı <a href="#yardim">Yardım</a> sekmesinde anlatılıyor.</p>
       <form class="token-form" id="token-form">
         <input type="password" id="t-input" autocomplete="off" spellcheck="false" placeholder="github_pat_…" aria-label="Yönetici anahtarı">
         <button class="btn primary" type="submit" id="t-save">Anahtarı kaydet</button>
@@ -520,7 +472,7 @@ function bindToken() {
   });
 }
 
-// ----- players (roster and nicknames) -----
+// ----- members (roster and nicknames) -----
 
 function rosterSorted() {
   return S.playerList(state.db).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'tr'));
@@ -535,7 +487,7 @@ function validatePlayer(db, name, nick, selfKey) {
   if (name.length > 30) return 'İsim en fazla 30 karakter olabilir.';
   if (nick.length > 24) return 'Nick en fazla 24 karakter olabilir.';
   const sameName = roster.find(p => p.key === nameK);
-  if (sameName) return `"${sameName.name}" adında bir oyuncu zaten var.`;
+  if (sameName) return `"${sameName.name}" adında bir üye zaten var.`;
   if (nickK) {
     const clash = roster.find(p => S.nameKey(p.nick) === nickK || p.key === nickK);
     if (clash) return `"${nick}" zaten ${clash.name} için kullanılıyor.`;
@@ -549,7 +501,7 @@ function playersHTML(admin) {
   const rows = roster.map(p => {
     if (admin && state.playerEdit === p.key) {
       return `<tr class="editing-row">
-          <td><input type="text" id="pe-name" value="${esc(p.name)}" maxlength="30" aria-label="İsim"${p.count ? ' disabled title="Oyunu olan oyuncunun ismi değiştirilemez"' : ''}></td>
+          <td><input type="text" id="pe-name" value="${esc(p.name)}" maxlength="30" aria-label="İsim"${p.count ? ' disabled title="Kaydı olan üyenin ismi değiştirilemez"' : ''}></td>
           <td><input type="text" id="pe-nick" value="${esc(p.nick)}" maxlength="24" placeholder="Nick" aria-label="Nick"></td>
           <td class="num">${p.count}</td>
           <td><span class="acts"><button type="button" class="btn small primary" data-p-save="${esc(p.key)}">Kaydet</button>
@@ -563,18 +515,18 @@ function playersHTML(admin) {
     return `<tr><td class="pname">${esc(p.name)}</td><td class="pnick">${p.nick ? esc(p.nick) : '<span class="dim">–</span>'}</td><td class="num">${p.count}</td>${acts}</tr>`;
   }).join('');
   return `<section class="block" id="players">
-      <div class="block-head"><h2>Oyuncular</h2><span class="dim">${roster.length} oyuncu</span></div>
+      <div class="block-head"><h2>Üyeler</h2><span class="dim">${roster.length} üye</span></div>
       <p class="dim" style="margin:0">Tablolarda ve görsellerde nick görünür, nick boşsa isim görünür. Gerçek adıyla görünmek isteyenin nick kısmı boş kalabilir.</p>
       ${admin ? `<form class="add-row" id="p-add">
-          <input type="text" id="p-name" maxlength="30" placeholder="İsim" aria-label="Yeni oyuncunun ismi" autocapitalize="words">
-          <input type="text" id="p-nick" maxlength="24" placeholder="Nick (isteğe bağlı)" aria-label="Yeni oyuncunun nicki">
-          <button type="submit" class="btn primary" id="p-add-btn"${state.playerBusy ? ' disabled' : ''}>Oyuncu ekle</button>
+          <input type="text" id="p-name" maxlength="30" placeholder="İsim" aria-label="Yeni üyenin ismi" autocapitalize="words">
+          <input type="text" id="p-nick" maxlength="24" placeholder="Nick (isteğe bağlı)" aria-label="Yeni üyenin nicki">
+          <button type="submit" class="btn primary" id="p-add-btn"${state.playerBusy ? ' disabled' : ''}>Üye ekle</button>
         </form>` : ''}
       <div id="p-msg">${msg}</div>
       ${roster.length ? `<div class="table-wrap"><table class="players">
-          <thead><tr><th>İsim</th><th>Nick</th><th>Oyun</th>${admin ? '<th></th>' : ''}</tr></thead>
+          <thead><tr><th>İsim</th><th>Nick</th><th>Gün</th>${admin ? '<th></th>' : ''}</tr></thead>
           <tbody>${rows}</tbody></table></div>`
-        : `<div class="empty" style="margin-top:0">Henüz oyuncu yok.${admin ? ' Yukarıdan ilk oyuncuyu ekle.' : ''}</div>`}
+        : `<div class="empty" style="margin-top:0">Henüz üye yok.${admin ? ' Yukarıdan ilk üyeyi ekle.' : ''}</div>`}
     </section>`;
 }
 
@@ -607,7 +559,7 @@ function bindPlayers() {
       if (again) throw userError(again);
       db.players.push(nick ? { name, nick } : { name });
       db.log.push({ at: new Date().toISOString(), action: 'player-add', after: { name, nick } });
-    }, `Oyuncu eklendi: ${name}`, `${name} eklendi.`);
+    }, `Üye eklendi: ${name}`, `${name} eklendi.`);
   });
 
   view.querySelectorAll('[data-p-edit]').forEach(b => b.addEventListener('click', () => {
@@ -633,7 +585,7 @@ function bindPlayers() {
     }
     playerChange(db => {
       const fresh = S.playerList(db).find(p => p.key === key);
-      if (!fresh) throw userError('Oyuncu bulunamadı. Sayfayı yenile.');
+      if (!fresh) throw userError('Üye bulunamadı. Sayfayı yenile.');
       const newName = fresh.count ? fresh.name : name;
       const again = validatePlayer(db, newName, nick, key);
       if (again) throw userError(again);
@@ -642,7 +594,7 @@ function bindPlayers() {
       entry.name = newName;
       if (nick) entry.nick = nick; else delete entry.nick;
       db.log.push({ at: new Date().toISOString(), action: 'player-edit', before: { name: fresh.name, nick: fresh.nick }, after: { name: newName, nick } });
-    }, `Oyuncu düzeltildi: ${current.name}`, `${name} güncellendi.`);
+    }, `Üye düzeltildi: ${current.name}`, `${name} güncellendi.`);
   });
 
   view.querySelectorAll('[data-p-del]').forEach(b => b.addEventListener('click', () => {
@@ -651,30 +603,76 @@ function bindPlayers() {
     if (!p) return;
     playerChange(db => {
       const fresh = S.playerList(db).find(x => x.key === key);
-      if (!fresh) throw userError('Oyuncu bulunamadı. Sayfayı yenile.');
-      if (fresh.count) throw userError('Oyunu olan oyuncu silinemez.');
+      if (!fresh) throw userError('Üye bulunamadı. Sayfayı yenile.');
+      if (fresh.count) throw userError('Kaydı olan üye silinemez.');
       db.players = db.players.filter(x => S.nameKey(x.name) !== key);
       db.log.push({ at: new Date().toISOString(), action: 'player-delete', before: { name: fresh.name, nick: fresh.nick } });
-    }, `Oyuncu silindi: ${p.name}`, `${p.name} silindi.`);
+    }, `Üye silindi: ${p.name}`, `${p.name} silindi.`);
   }));
 }
 
-// ----- match entry -----
+// ----- day entry -----
+// The form keeps one row per person with the hours and minutes exactly as typed. The ranking is
+// never entered by hand: it is the rows sorted by time worked, longest first. Only people with
+// exactly the same time can be swapped.
 
-function analyzeGame() {
+let sortTimer;
+
+// Minutes typed into a row: null while both boxes are empty, NaN when it is not a whole number.
+function rowMinutes(r) {
+  const h = r.h.trim();
+  const m = r.m.trim();
+  if (!h && !m) return null;
+  if (!/^\d*$/.test(h) || !/^\d*$/.test(m)) return NaN;
+  return Number(h || 0) * 60 + Number(m || 0);
+}
+
+function sortedRows() {
+  const val = r => { const m = rowMinutes(r); return Number.isFinite(m) && m !== null ? m : -1; };
+  return state.form.rows.map((r, i) => ({ r, i })).sort((a, b) => val(b.r) - val(a.r) || a.i - b.i).map(x => x.r);
+}
+
+function sameTime(a, b) {
+  const x = rowMinutes(a);
+  return x !== null && Number.isFinite(x) && x === rowMinutes(b);
+}
+
+function analyzeDay() {
   const f = state.form;
+  const rl = rules();
   const errors = [];
   const warnings = [];
   if (!S.isValidISODate(f.date)) errors.push('Geçerli bir tarih seç.');
   else if (f.date > today) errors.push('Gelecekteki bir tarih seçilemez.');
-  if (f.order.length < S.MIN_PLAYERS) errors.push(`En az ${S.MIN_PLAYERS} oyuncu seç.`);
-  if (S.isValidISODate(f.date)) {
-    const same = (state.db.games || []).filter(g => !g.deleted && g.date === f.date && g.id !== f.editId);
-    if (same.length) warnings.push(`Bu tarihte zaten ${same.map(g => `#${g.id}`).join(', ')} numaralı oyun var. İkinci bir oyunsa sorun yok.`);
+  else {
+    const same = (state.db.games || []).find(g => !g.deleted && g.date === f.date && g.id !== f.editId);
+    if (same) errors.push(`${S.formatDate(f.date)} zaten kayıtlı. Aşağıdaki listeden "Düzelt" ile değiştirebilirsin.`);
   }
-  if (f.editId) {
+  if (!f.rows.length) errors.push('En az bir kişi seç.');
+
+  const missing = [];
+  for (const r of f.rows) {
+    const m = rowMinutes(r);
+    if (m === null) missing.push(r.name);
+    else if (!Number.isFinite(m)) errors.push(`${r.name}: süre sadece rakam olmalı.`);
+    else if (m === 0) errors.push(`${r.name}: süre 0 olamaz. Çalışmadıysa listeden çıkar.`);
+    else if (m > S.MAX_DAY_MINUTES) errors.push(`${r.name}: bir gün 24 saatten uzun olamaz.`);
+  }
+  if (missing.length) errors.push(`Süre gir: ${missing.join(', ')}.`);
+
+  const order = sortedRows();
+  order.forEach((r, i) => {
+    const next = order[i + 1];
+    if (next && sameTime(r, next) && S.pointsFor(i + 1, rl) !== S.pointsFor(i + 2, rl)) {
+      warnings.push(`${r.name} ve ${next.name} aynı süreyi çalışmış. Üstteki önde sayılır; ↑ ↓ ile değiştirebilirsin.`);
+    }
+  });
+
+  if (f.editId && !errors.length) {
     const g = state.db.games.find(x => x.id === f.editId);
-    if (g && g.date === f.date && g.players.join('\n') === f.order.join('\n')) errors.push('Henüz bir değişiklik yapmadın.');
+    const same = g && g.date === f.date && g.players.length === order.length
+      && order.every((r, i) => r.name === g.players[i] && rowMinutes(r) === S.minutesOf(g, i));
+    if (same) errors.push('Henüz bir değişiklik yapmadın.');
   }
   return { errors, warnings };
 }
@@ -683,7 +681,7 @@ function entryHTML() {
   const f = state.form;
   const msg = f.msg ? `<p class="msg ${f.msg.ok ? 'ok' : 'err'}">${f.msg.html}</p>` : '';
   return `<section class="block" id="entry">
-      <div class="block-head"><h2>${f.editId ? `Oyun #${f.editId} düzenleniyor` : 'Maç kaydet'}</h2>
+      <div class="block-head"><h2>${f.editId ? `${S.formatDate(editingDate())} düzenleniyor` : 'Gün kaydet'}</h2>
         ${f.editId ? '<button type="button" class="btn small" data-act="cancel-edit">Düzenlemeden çık</button>' : ''}</div>
       <div class="panel">
         <div class="entry-grid">
@@ -693,17 +691,17 @@ function entryHTML() {
               <input type="date" id="f-date" value="${esc(f.date)}" max="${today}">
             </div>
             <div class="field">
-              <span class="label">Oyuncular <span class="hint">· bitiş sırasına göre dokun: önce 1., sonra 2. …</span></span>
+              <span class="label">Üyeler <span class="hint">· o gün çalışanlara dokun</span></span>
               <div class="chips" id="f-chips"></div>
             </div>
           </div>
           <div>
-            <span class="label">Sıralama</span>
+            <span class="label">Çalışma süreleri <span class="hint">· en çok çalışan 1. olur</span></span>
             <ol class="ranking" id="f-rank"></ol>
             <ul class="issues" id="f-issues"></ul>
             <div class="save-row">
-              <button type="button" class="btn primary" id="f-save">${f.editId ? 'Değişikliği kaydet' : 'Oyunu kaydet'}</button>
-              <button type="button" class="btn" data-act="clear-order">Sıralamayı temizle</button>
+              <button type="button" class="btn primary" id="f-save">${f.editId ? 'Değişikliği kaydet' : 'Günü kaydet'}</button>
+              <button type="button" class="btn" data-act="clear-rows">Listeyi temizle</button>
             </div>
             <div id="f-msg">${msg}</div>
           </div>
@@ -712,65 +710,124 @@ function entryHTML() {
     </section>`;
 }
 
-function bindEntry() {
-  const f = state.form;
-  const dateEl = document.getElementById('f-date');
-  dateEl.addEventListener('input', () => { f.date = dateEl.value; f.msg = null; updateEntry(); });
-  document.getElementById('f-save').addEventListener('click', saveGame);
-  view.querySelector('[data-act="clear-order"]').addEventListener('click', () => { f.order = []; f.msg = null; updateEntry(); });
-  view.querySelector('[data-act="cancel-edit"]')?.addEventListener('click', () => { state.form = blankForm(); render(); });
-  updateEntry();
+function editingDate() {
+  return state.db.games.find(g => g.id === state.form.editId)?.date || state.form.date;
 }
 
-function updateEntry() {
+function nameLabel(name) {
+  const nick = nicks()[S.nameKey(name)];
+  return nick ? `${esc(nick)} <small>${esc(name)}</small>` : esc(name);
+}
+
+function bindEntry() {
   const f = state.form;
-  const nk = nicks();
-  const roster = rosterSorted();
-  const used = new Set(f.order.map(S.nameKey));
-  const label = name => {
-    const nick = nk[S.nameKey(name)];
-    return nick ? `${esc(nick)} <small>${esc(name)}</small>` : esc(name);
-  };
+  const touched = () => { f.msg = null; document.getElementById('f-msg').innerHTML = ''; };
+  const dateEl = document.getElementById('f-date');
+  dateEl.addEventListener('input', () => { f.date = dateEl.value; touched(); refreshEntry(); });
+  document.getElementById('f-save').addEventListener('click', saveDay);
+  view.querySelector('[data-act="clear-rows"]').addEventListener('click', () => { f.rows = []; touched(); drawEntry(); });
+  view.querySelector('[data-act="cancel-edit"]')?.addEventListener('click', () => { state.form = blankForm(); render(); });
 
-  const chipsEl = document.getElementById('f-chips');
-  chipsEl.innerHTML = roster.length
-    ? roster.map(p => `<button type="button" class="chip" data-add="${esc(p.name)}"${used.has(p.key) ? ' disabled' : ''}>${label(p.name)}</button>`).join('')
-    : '<span class="hint">Önce yukarıdaki Oyuncular bölümünden oyuncu ekle.</span>';
-  chipsEl.querySelectorAll('[data-add]').forEach(c => c.addEventListener('click', () => {
-    f.order.push(c.dataset.add);
-    f.msg = null;
-    updateEntry();
-  }));
+  document.getElementById('f-chips').addEventListener('click', e => {
+    const chip = e.target.closest('[data-add]');
+    if (!chip) return;
+    const row = { name: chip.dataset.add, h: '', m: '' };
+    f.rows.push(row);
+    touched();
+    drawEntry();
+    document.querySelector(`#f-rank [data-h="${f.rows.indexOf(row)}"]`)?.focus();
+  });
 
-  const n = f.order.length;
   const rankEl = document.getElementById('f-rank');
-  rankEl.innerHTML = n
-    ? f.order.map((name, i) => `<li>
-        <span class="pl">${i + 1}</span>
-        <span class="nm">${label(name)}</span>
-        <span class="pt">${S.pointsFor(i + 1, n)}<small>puan</small></span>
-        <span class="mv">
-          <button type="button" class="icon" data-up="${i}" aria-label="${esc(name)} yukarı"${i === 0 ? ' disabled' : ''}>↑</button>
-          <button type="button" class="icon" data-down="${i}" aria-label="${esc(name)} aşağı"${i === n - 1 ? ' disabled' : ''}>↓</button>
-          <button type="button" class="icon" data-rm="${i}" aria-label="${esc(name)} çıkar">✕</button>
-        </span></li>`).join('')
-    : '<li class="placeholder">Oyunculara dokundukça sıralama burada puanlarıyla oluşur.</li>';
-  const move = (i, j) => { [f.order[i], f.order[j]] = [f.order[j], f.order[i]]; f.msg = null; updateEntry(); };
-  rankEl.querySelectorAll('[data-up]').forEach(b => b.addEventListener('click', () => move(+b.dataset.up, +b.dataset.up - 1)));
-  rankEl.querySelectorAll('[data-down]').forEach(b => b.addEventListener('click', () => move(+b.dataset.down, +b.dataset.down + 1)));
-  rankEl.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => { f.order.splice(+b.dataset.rm, 1); f.msg = null; updateEntry(); }));
+  rankEl.addEventListener('input', e => {
+    const el = e.target;
+    if (el.dataset.h !== undefined) f.rows[+el.dataset.h].h = el.value;
+    else if (el.dataset.m !== undefined) f.rows[+el.dataset.m].m = el.value;
+    else return;
+    touched();
+    refreshEntry();
+  });
+  rankEl.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const swap = (i, j) => { [f.rows[i], f.rows[j]] = [f.rows[j], f.rows[i]]; };
+    if (b.dataset.up !== undefined) swap(+b.dataset.up, +b.dataset.up - 1);
+    else if (b.dataset.down !== undefined) swap(+b.dataset.down, +b.dataset.down + 1);
+    else if (b.dataset.rm !== undefined) f.rows.splice(+b.dataset.rm, 1);
+    else return;
+    touched();
+    drawEntry();
+  });
+  // Rows only move once typing has stopped and the focus has left the list, never under the cursor.
+  rankEl.addEventListener('focusin', () => clearTimeout(sortTimer));
+  rankEl.addEventListener('focusout', () => {
+    clearTimeout(sortTimer);
+    sortTimer = setTimeout(() => {
+      const el = document.getElementById('f-rank');
+      if (!el || el.contains(document.activeElement)) return;
+      if (sortedRows().some((r, i) => r !== state.form.rows[i])) drawEntry();
+    }, 250);
+  });
+  drawEntry();
+}
 
-  const a = analyzeGame();
-  const shown = a.errors.filter(e => n > 0 || !e.startsWith('En az'));
+// Rebuilds the chips and the sorted list. Not called while someone is typing in the list.
+function drawEntry() {
+  clearTimeout(sortTimer);
+  const f = state.form;
+  f.rows = sortedRows();
+  const roster = rosterSorted();
+  const used = new Set(f.rows.map(r => S.nameKey(r.name)));
+
+  document.getElementById('f-chips').innerHTML = roster.length
+    ? roster.map(p => `<button type="button" class="chip" data-add="${esc(p.name)}"${used.has(p.key) ? ' disabled' : ''}>${nameLabel(p.name)}</button>`).join('')
+    : '<span class="hint">Önce yukarıdaki Üyeler bölümünden üye ekle.</span>';
+
+  document.getElementById('f-rank').innerHTML = f.rows.length
+    ? f.rows.map((r, i) => `<li>
+        <span class="pl"></span>
+        <span class="nm">${nameLabel(r.name)}<span class="pt"></span></span>
+        <span class="durin">
+          <input type="text" inputmode="numeric" maxlength="2" data-h="${i}" value="${esc(r.h)}" placeholder="0" aria-label="${esc(r.name)} saat"><span>sa</span>
+          <input type="text" inputmode="numeric" maxlength="3" data-m="${i}" value="${esc(r.m)}" placeholder="0" aria-label="${esc(r.name)} dakika"><span>dk</span>
+        </span>
+        <span class="mv">
+          ${i > 0 && sameTime(r, f.rows[i - 1]) ? `<button type="button" class="icon" data-up="${i}" aria-label="${esc(r.name)} yukarı">↑</button>` : ''}
+          ${i < f.rows.length - 1 && sameTime(r, f.rows[i + 1]) ? `<button type="button" class="icon" data-down="${i}" aria-label="${esc(r.name)} aşağı">↓</button>` : ''}
+          <button type="button" class="icon" data-rm="${i}" aria-label="${esc(r.name)} çıkar">✕</button>
+        </span></li>`).join('')
+    : '<li class="placeholder">Üyelere dokun, sonra herkesin çalışma süresini yaz. Sıralama süreye göre kendiliğinden oluşur.</li>';
+  refreshEntry();
+}
+
+// Updates everything that depends on the typed values without touching the inputs themselves.
+function refreshEntry() {
+  const f = state.form;
+  const rl = rules();
+  const order = sortedRows();
+  const items = document.getElementById('f-rank').children;
+  f.rows.forEach((r, i) => {
+    const li = items[i];
+    const m = rowMinutes(r);
+    const place = Number.isFinite(m) && m !== null && m > 0 ? order.indexOf(r) + 1 : 0;
+    const pts = place ? S.pointsFor(place, rl) : 0;
+    li.querySelector('.pl').textContent = place || '–';
+    li.querySelector('.pt').textContent = pts ? `+${pts} puan` : '';
+  });
+
+  const a = analyzeDay();
+  const shown = a.errors.filter(e => f.rows.length > 0 || !e.startsWith('En az'));
   document.getElementById('f-issues').innerHTML =
     shown.map(e => `<li class="err">${esc(e)}</li>`).join('') + a.warnings.map(w => `<li class="warn">${esc(w)}</li>`).join('');
   document.getElementById('f-save').disabled = f.busy || a.errors.length > 0;
 }
 
-async function saveGame() {
+async function saveDay() {
   const f = state.form;
-  if (analyzeGame().errors.length || f.busy) return;
-  const players = f.order.slice();
+  if (analyzeDay().errors.length || f.busy) return;
+  const order = sortedRows();
+  const players = order.map(r => r.name);
+  const minutes = order.map(rowMinutes);
   const date = f.date;
   const editId = f.editId;
   f.busy = true;
@@ -781,25 +838,29 @@ async function saveGame() {
     const info = await mutate(db => {
       const roster = new Set(S.playerList(db).map(p => p.key));
       const missing = players.filter(n => !roster.has(S.nameKey(n)));
-      if (missing.length) throw userError(`Oyuncu listesinde yok: ${missing.join(', ')}. Sayfayı yenile.`);
+      if (missing.length) throw userError(`Üye listesinde yok: ${missing.join(', ')}. Sayfayı yenile.`);
+      if (db.games.some(g => !g.deleted && g.date === date && g.id !== editId)) {
+        throw userError(`${S.formatDate(date)} zaten kayıtlı. Sayfayı yenile.`);
+      }
       const at = new Date().toISOString();
       if (editId) {
         const g = db.games.find(x => x.id === editId);
-        if (!g) throw userError(`Oyun #${editId} bulunamadı. Sayfayı yenile.`);
-        const before = { date: g.date, players: g.players };
+        if (!g) throw userError('Bu gün bulunamadı. Sayfayı yenile.');
+        const before = daySnap(g);
         g.date = date;
         g.players = players;
-        db.log.push({ at, action: 'edit', id: editId, before, after: { date, players } });
-        return { text: `Oyun #${editId} düzeltildi` };
+        g.minutes = minutes;
+        db.log.push({ at, action: 'edit', id: editId, before, after: { date, players, minutes } });
+        return { text: 'Gün düzeltildi' };
       }
       const id = db.games.reduce((m, g) => Math.max(m, g.id), 0) + 1;
-      db.games.push({ id, date, players });
-      db.log.push({ at, action: 'add', id, after: { date, players } });
-      return { text: `Oyun #${id} eklendi` };
+      db.games.push({ id, date, players, minutes });
+      db.log.push({ at, action: 'add', id, after: { date, players, minutes } });
+      return { text: 'Gün eklendi' };
     }, info => `${info.text} (${S.formatDate(date)})`);
     const key = S.ligKey(date);
     state.form = blankForm();
-    state.form.msg = { ok: true, html: `${info.text}. Tablolar güncellendi, görseller 1–2 dakika içinde hazır olur. <a href="#lig-${key}">${esc(S.ligLabel(key))}</a> · <a href="#ana">Ana Tablo</a>` };
+    state.form.msg = { ok: true, html: `${S.formatDate(date)} kaydedildi. Tablolar güncellendi, görseller 1–2 dakika içinde hazır olur. <a href="#lig-${key}">${esc(S.ligLabel(key))}</a> · <a href="#ana">Ana Tablo</a>` };
   } catch (e) {
     f.busy = false;
     f.msg = { ok: false, html: esc(errorText(e)) };
@@ -808,17 +869,27 @@ async function saveGame() {
   document.getElementById('entry')?.scrollIntoView({ block: 'start' });
 }
 
-// ---------- games list and history ----------
+// ---------- day list and history ----------
 
-function gamesHTML(admin) {
+function daySnap(g) {
+  return { date: g.date, players: g.players, minutes: g.players.map((_, i) => S.minutesOf(g, i)) };
+}
+
+// "1. Ayşe 5 sa 30 dk  2. Can 4 sa": works for a day and for a snapshot kept in the log.
+function orderText(day, nk) {
+  return day.players.map((name, i) =>
+    `<span class="who"><b>${i + 1}.</b> ${esc(nk ? S.displayName(name, nk) : name)} ${durHTML(S.minutesOf(day, i))}</span>`).join(' ');
+}
+
+function daysHTML(admin) {
   const nk = nicks();
   const all = (state.db.games || [])
     .filter(g => state.showDeleted || !g.deleted)
     .slice()
     .sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : b.id - a.id));
-  const games = state.gamesAll ? all : all.slice(0, GAMES_PREVIEW);
+  const days = state.daysAll ? all : all.slice(0, DAYS_PREVIEW);
   const deletedCount = (state.db.games || []).filter(g => g.deleted).length;
-  const rows = games.map(g => {
+  const rows = days.map(g => {
     let acts = '';
     if (admin) {
       if (state.confirmDelete === g.id) {
@@ -832,33 +903,33 @@ function gamesHTML(admin) {
       }
     }
     return `<tr class="${g.deleted ? 'deleted' : ''}">
-        <td class="num">${g.id}</td>
         <td>${S.formatDate(g.date)}</td>
         <td>${esc(S.ligShort(S.ligKey(g.date)))}</td>
         <td>${g.players.length}</td>
-        <td class="order">${orderText(g.players.map(n => S.displayName(n, nk)))}${g.deleted ? ' <span class="tag dup">silindi</span>' : ''}</td>
+        <td class="order">${orderText(g, nk)}${g.deleted ? ' <span class="tag dup">silindi</span>' : ''}</td>
         ${admin ? `<td>${acts}</td>` : ''}
       </tr>`;
   }).join('');
-  return `<section class="block" id="games">
+  return `<section class="block" id="days">
       <div class="block-head">
-        <h2>Tüm oyunlar</h2>
+        <h2>Tüm günler</h2>
         <div class="share-actions">
           ${deletedCount ? `<label class="check"><input type="checkbox" id="g-deleted"${state.showDeleted ? ' checked' : ''}> Silinenleri göster (${deletedCount})</label>` : ''}
           <button type="button" class="btn small" data-act="csv-all"${all.length ? '' : ' disabled'}>CSV indir</button>
         </div>
       </div>
       ${all.length ? `<div class="table-wrap"><table class="games">
-        <thead><tr><th>#</th><th>Tarih</th><th>Lig</th><th>Kişi</th><th style="text-align:left">Sıralama</th>${admin ? '<th></th>' : ''}</tr></thead>
+        <thead><tr><th>Tarih</th><th>Lig</th><th>Kişi</th><th style="text-align:left">Sıralama ve süreler</th>${admin ? '<th></th>' : ''}</tr></thead>
         <tbody>${rows}</tbody></table></div>`
-        : '<div class="empty" style="margin-top:0">Henüz oyun girilmedi.</div>'}
-      ${all.length > games.length ? `<div><button type="button" class="btn small" data-act="games-all">Tümünü göster (${all.length})</button></div>` : ''}
+        : '<div class="empty" style="margin-top:0">Henüz gün kaydedilmedi.</div>'}
+      ${all.length > days.length ? `<div><button type="button" class="btn small" data-act="days-all">Tümünü göster (${all.length})</button></div>` : ''}
     </section>`;
 }
 
 const ACT = {
-  add: ['add', 'Eklendi'], edit: ['edit', 'Düzeltildi'], delete: ['delete', 'Silindi'], restore: ['restore', 'Geri alındı'],
-  'player-add': ['add', 'Oyuncu eklendi'], 'player-edit': ['edit', 'Oyuncu düzeltildi'], 'player-delete': ['delete', 'Oyuncu silindi'],
+  add: ['add', 'Gün eklendi'], edit: ['edit', 'Gün düzeltildi'], delete: ['delete', 'Gün silindi'], restore: ['restore', 'Gün geri alındı'],
+  'player-add': ['add', 'Üye eklendi'], 'player-edit': ['edit', 'Üye düzeltildi'], 'player-delete': ['delete', 'Üye silindi'],
+  settings: ['edit', 'Ayar değişti'],
 };
 
 function personText(p) {
@@ -872,18 +943,20 @@ function historyHTML() {
     const [cls, label] = ACT[l.action] || ['edit', l.action];
     let what;
     let detail;
-    if (l.action.startsWith('player-')) {
+    if (l.action === 'settings') {
+      what = 'Puan sistemi';
+      detail = `<s>${esc(S.rulesText(S.normalizePoints(l.before?.points)))}</s> → ${esc(S.rulesText(S.normalizePoints(l.after?.points)))}`;
+    } else if (l.action.startsWith('player-')) {
       what = esc((l.after || l.before).name);
       detail = l.action === 'player-edit'
         ? `<s>${personText(l.before)}</s> → ${personText(l.after)}`
         : personText(l.after || l.before);
     } else {
-      what = `Oyun #${l.id}`;
       const snap = l.after || l.before;
-      detail = snap ? `${S.formatDate(snap.date)} · ${orderText(snap.players)}` : '';
+      what = snap ? S.formatDate(snap.date) : '';
+      detail = snap ? orderText(snap) : '';
       if (l.action === 'edit' && l.before) {
-        const b = l.before;
-        detail = `<s>${S.formatDate(b.date)} · ${b.players.map((n, i) => `${i + 1}. ${esc(n)}`).join(' ')}</s><br>${S.formatDate(l.after.date)} · ${orderText(l.after.players)}`;
+        detail = `<s>${S.formatDate(l.before.date)} · ${orderText(l.before)}</s><br>${S.formatDate(l.after.date)} · ${orderText(l.after)}`;
       }
     }
     return `<li><time datetime="${esc(l.at)}">${fmtDateTime(l.at)}</time>
@@ -899,17 +972,21 @@ function historyHTML() {
     </section>`;
 }
 
-function bindGames(admin) {
+function bindDays(admin) {
   view.querySelector('#g-deleted')?.addEventListener('change', e => { state.showDeleted = e.target.checked; render(); });
   view.querySelector('[data-act="csv-all"]')?.addEventListener('click', () =>
-    download('forest-ligi-tum-oyunlar.csv', S.gamesCsv(S.activeGames(state.db), nicks()), 'text/csv;charset=utf-8'));
-  view.querySelector('[data-act="games-all"]')?.addEventListener('click', () => { state.gamesAll = true; render(); });
+    download('forest-ligi-tum-gunler.csv', S.gamesCsv(S.activeGames(state.db), nicks(), rules()), 'text/csv;charset=utf-8'));
+  view.querySelector('[data-act="days-all"]')?.addEventListener('click', () => { state.daysAll = true; render(); });
   view.querySelector('[data-act="history-all"]')?.addEventListener('click', () => { state.historyAll = true; render(); });
   if (!admin) return;
 
   view.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
     const g = state.db.games.find(x => x.id === Number(b.dataset.edit));
-    state.form = { ...blankForm(), editId: g.id, date: g.date, order: g.players.slice() };
+    const rows = g.players.map((name, i) => {
+      const min = S.minutesOf(g, i);
+      return { name, h: min ? String(Math.floor(min / 60)) : '', m: min ? String(min % 60) : '' };
+    });
+    state.form = { ...blankForm(), editId: g.id, date: g.date, rows };
     render();
     document.getElementById('entry').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }));
@@ -922,20 +999,21 @@ function bindGames(admin) {
 async function setDeleted(id, deleted) {
   view.querySelectorAll('.games .btn').forEach(b => { b.disabled = true; });
   try {
-    await mutate(db => {
+    const info = await mutate(db => {
       const g = db.games.find(x => x.id === id);
-      if (!g) throw userError(`Oyun #${id} bulunamadı. Sayfayı yenile.`);
-      const snap = { date: g.date, players: g.players };
+      if (!g) throw userError('Bu gün bulunamadı. Sayfayı yenile.');
+      const day = S.formatDate(g.date);
       if (deleted) {
         g.deleted = true;
-        db.log.push({ at: new Date().toISOString(), action: 'delete', id, before: snap });
+        db.log.push({ at: new Date().toISOString(), action: 'delete', id, before: daySnap(g) });
       } else {
+        if (db.games.some(x => !x.deleted && x.date === g.date)) throw userError(`${day} için yeni bir kayıt var. Önce onu sil.`);
         delete g.deleted;
-        db.log.push({ at: new Date().toISOString(), action: 'restore', id, after: snap });
+        db.log.push({ at: new Date().toISOString(), action: 'restore', id, after: daySnap(g) });
       }
-      return { text: deleted ? `Oyun #${id} silindi` : `Oyun #${id} geri alındı` };
+      return { day, text: deleted ? `Gün silindi (${day})` : `Gün geri alındı (${day})` };
     }, info => info.text);
-    toast(deleted ? `Oyun #${id} silindi. "Silinenleri göster" ile geri alabilirsin.` : `Oyun #${id} geri alındı.`);
+    toast(deleted ? `${info.day} silindi. "Silinenleri göster" ile geri alabilirsin.` : `${info.day} geri alındı.`);
   } catch (e) {
     toast(errorText(e));
   }
@@ -944,329 +1022,194 @@ async function setDeleted(id, deleted) {
   render();
 }
 
-// ---------- Oyunlar (geçmiş oyunlar) ----------
+// ---------- Günler ----------
 
-// Podium/first-loser class shared by the games list and the poker-table seats.
-function placeClass(place, n) {
-  if (place === 1) return 'win';
-  if (place === 2) return 'second';
-  if (place === 3) return 'third';
-  if (S.isFirstLoser(place, n)) return 'loser';
-  return '';
-}
+const PLACE_CLASS = ['win', 'second', 'third'];
 
-const PLACE_TAG = { win: 'kazanan', second: '2.', third: '3.', loser: 'ilk kaybeden' };
-const PLACE_ICON = { win: '👑', second: '🥈', third: '🥉', loser: '🍂' };
-
-function gameRankHTML(g, nk) {
-  const n = g.players.length;
-  const items = g.players.map((name, i) => {
-    const place = i + 1;
-    const pts = S.pointsFor(place, n);
-    const disp = S.displayName(name, nk);
-    const cls = placeClass(place, n);
-    const tag = cls ? `<span class="tag ${cls}">${PLACE_TAG[cls]}</span>` : '';
-    return `<li class="${cls}"><span class="pl">${place}</span><span class="nm">${esc(disp)}${tag}</span><span class="pt">${pts}<small>puan</small></span></li>`;
-  }).join('');
-  return `<ol class="glist">${items}</ol>`;
-}
-
-// Seats laid out clockwise around an oval, starting at 12 o'clock, winner first.
-// The table image is a rounded rectangle (a stadium), inset 14% into the card on every
-// side, so its half-width/half-height in the card's own width-units are:
-const PTABLE_ASPECT = 3 / 2;             // matches the .ptable CSS aspect-ratio
-const PTABLE_IMG_A = 0.36;               // image half-width, as a fraction of card width
-const PTABLE_IMG_B = 0.36 / PTABLE_ASPECT; // image half-height, in the same width-units
-const SEAT_GAP = 0.085;                  // constant visual gap from the rail, in width-units
-
-// Seats are spaced evenly along the table's actual outline, offset outward by a fixed
-// gap: a flat run along the top/bottom, a curved arc around each rounded end. That keeps
-// every seat the same distance from the rail, instead of a plain ellipse (equal angles,
-// not equal rail-distance) leaving the top/bottom seats stranded far from the straight
-// edge while the side seats hug the curve.
-function seatPos(i, n) {
-  const a = PTABLE_IMG_A + SEAT_GAP;
-  const b = PTABLE_IMG_B + SEAT_GAP;
-  const L = a - b;               // half-length of each straight side
-  const arc = Math.PI * b;       // length of one rounded end
-  const perimeter = 4 * L + 2 * arc;
-  let d = (perimeter * i) / n;   // distance walked clockwise from top-center, in width-units
-
-  let x, y;
-  if (d <= L) {
-    x = d; y = -b;
-  } else if ((d -= L) <= arc) {
-    const t = -Math.PI / 2 + d / b;
-    x = L + b * Math.cos(t); y = b * Math.sin(t);
-  } else if ((d -= arc) <= 2 * L) {
-    x = L - d; y = b;
-  } else if ((d -= 2 * L) <= arc) {
-    const t = Math.PI / 2 + d / b;
-    x = -L + b * Math.cos(t); y = b * Math.sin(t);
-  } else {
-    d -= arc;
-    x = -L + d; y = -b;
-  }
-  // x is a fraction of card width; convert y (same width-units) into a fraction of card
-  // height by scaling with the aspect ratio, since left%/top% resolve against different axes.
-  return { x: 50 + 100 * x, y: 50 + 100 * PTABLE_ASPECT * y };
-}
-
-// Bigger tables seat more people in the same ellipse, so seats shrink a bit past 6 players
-// to keep them from overlapping each other.
-function seatScale(n) {
-  return Math.max(0.6, Math.min(1, 6 / n));
-}
-
-function pokerTableHTML(g, nk) {
-  const n = g.players.length;
-  const scale = seatScale(n);
-  const seats = g.players.map((name, i) => {
-    const place = i + 1;
-    const pts = S.pointsFor(place, n);
-    const disp = S.displayName(name, nk);
-    const pos = seatPos(i, n);
-    const cls = placeClass(place, n);
-    const icon = PLACE_ICON[cls] || '';
-    return `<div class="pseat${cls ? ` ${cls}` : ''}" style="left:${pos.x.toFixed(1)}%;top:${pos.y.toFixed(1)}%">
-        <span class="av-wrap"><span class="av">${place}</span>${icon ? `<span class="picon" aria-hidden="true">${icon}</span>` : ''}</span>
-        <span class="nm">${esc(disp)}</span>
-        <span class="pt">${pts}<small>p</small></span>
-      </div>`;
-  }).join('');
-  return `<div class="ptable" style="--s:${scale.toFixed(2)}">
-      <img class="ptable-bg" src="assets/poker-table.svg" alt="" aria-hidden="true">
-      <div class="ptable-felt"><span>${n}<small>kişi</small></span></div>
-      ${seats}
-    </div>`;
-}
-
-function renderOyunlar() {
+function renderGunler() {
   const nk = nicks();
-  const games = S.activeGames(state.db).slice().reverse();
-  const gv = state.gamesView;
+  const rl = rules();
+  const days = S.activeGames(state.db).slice().reverse();
 
   const head = `<section class="page-head">
-      <p class="eyebrow">Geçmiş</p><h1>Oyunlar</h1>
-      <p class="lede">Her oyunun tam sıralaması, kim kazandı, kim ilk kaybeden oldu — hepsi burada. Tablo ya da masa görünümüyle incele.</p>
+      <p class="eyebrow">Geçmiş</p><h1>Günler</h1>
+      <p class="lede">Kayıtlı her günün sıralaması: kim ne kadar çalıştı, günü kim kazandı.</p>
     </section>`;
 
-  if (!games.length) {
-    view.innerHTML = `${head}<div class="empty"><strong>Henüz oyun yok</strong>İlk oyun eklendiğinde burada listelenir.</div>`;
+  if (!days.length) {
+    view.innerHTML = `${head}<div class="empty"><strong>Henüz kayıt yok</strong>İlk gün kaydedildiğinde burada listelenir.</div>`;
     return;
   }
 
-  const toggle = `<div class="view-toggle" role="radiogroup" aria-label="Görünüm">
-      <button type="button" role="radio" aria-checked="${gv === 'table'}" data-view="table">Tablo</button>
-      <button type="button" role="radio" aria-checked="${gv === 'grid'}" data-view="grid">Masa</button>
-    </div>`;
-
-  let body;
-  if (gv === 'grid') {
-    const legend = `<div class="plegend"><span>👑 Kazanan</span><span>🥈 2.</span><span>🥉 3.</span><span>🍂 İlk kaybeden</span></div>`;
-    body = `${legend}<div class="goyun-grid">${games.map(g => `
-      <article class="gcard">
-        <div class="gcard-head">
-          <span class="gcard-date">${S.formatDate(g.date)}</span>
-          <span class="gcard-lig">${esc(S.ligLabel(S.ligKey(g.date)))}</span>
-        </div>
-        ${pokerTableHTML(g, nk)}
-      </article>`).join('')}</div>`;
-  } else {
-    const rows = games.map(g => `<tr>
-        <td class="num">#${g.id}</td>
+  const rows = days.map(g => {
+    const total = g.players.reduce((a, _, i) => a + S.minutesOf(g, i), 0);
+    const items = g.players.map((name, i) => {
+      const pts = S.pointsFor(i + 1, rl);
+      return `<li class="${PLACE_CLASS[i] || ''}"><span class="pl">${i + 1}</span>
+          <span class="nm">${esc(S.displayName(name, nk))}${pts ? `<span class="tag win">+${pts} puan</span>` : ''}</span>
+          <span class="pt">${durHTML(S.minutesOf(g, i))}</span></li>`;
+    }).join('');
+    return `<tr>
         <td>${S.formatDate(g.date)}</td>
-        <td>${esc(S.ligLabel(S.ligKey(g.date)))}</td>
-        <td class="num">${g.players.length}</td>
-        <td class="order">${gameRankHTML(g, nk)}</td>
-      </tr>`).join('');
-    body = `<div class="table-wrap"><table class="games oyunlar-table">
-        <thead><tr><th>#</th><th>Tarih</th><th>Lig</th><th>Kişi</th><th style="text-align:left">Sıralama</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>`;
-  }
+        <td>${esc(S.ligShort(S.ligKey(g.date)))}</td>
+        <td class="total">${durHTML(total)}</td>
+        <td class="order"><ol class="glist">${items}</ol></td>
+      </tr>`;
+  }).join('');
 
   view.innerHTML = `${head}
-    <div class="toolbar"><p class="sorted">${games.length} oyun</p>${toggle}</div>
-    ${body}`;
-
-  view.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => {
-    state.gamesView = b.dataset.view;
-    lsSet(LS_GAMEVIEW, state.gamesView);
-    render();
-  }));
+    <div class="toolbar"><p class="sorted">${days.length} gün · en yenisi üstte</p></div>
+    <div class="table-wrap"><table class="games gunler-table">
+      <thead><tr><th>Tarih</th><th>Lig</th><th>Toplam</th><th style="text-align:left">Sıralama</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
 }
 
-// ---------- Blindlar ----------
+// ---------- Ayarlar ----------
 
-const HOURS = [1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 6];
-
-function hoursText(h) {
-  const whole = Math.floor(h);
-  return h % 1 ? `${whole} saat 30 dk` : `${whole} saat`;
-}
-
-function renderBlind() {
-  const b = state.blinds;
-  const seg = (name, options) => `<div class="seg" role="radiogroup">${options.map(o =>
-    `<button type="button" role="radio" aria-checked="${String(b[name]) === String(o.value)}" data-seg="${name}" data-val="${o.value}">${o.label}</button>`).join('')}</div>`;
-  view.innerHTML = `<section class="page-head">
-      <p class="eyebrow">Hesaplayıcı</p><h1>Blindlar</h1>
-      <p class="lede">Oyunun başında blind'lar kaç olsun, ne zaman ve ne kadar artsın? Masayı ve çipleri gir, akşamın blind tablosu çıksın.</p>
-    </section>
-    <section class="panel">
-      <div class="blind-form">
-        <div class="field"><label for="b-players">Oyuncu sayısı</label>
-          <input type="number" id="b-players" inputmode="numeric" min="2" max="30" step="1" value="${b.players}"></div>
-        <div class="field"><label for="b-stack">Kişi başı çip <span class="hint">· başlangıç stack'i</span></label>
-          <input type="number" id="b-stack" inputmode="numeric" min="1" step="1" value="${b.stack}"></div>
-        <div class="field"><label for="b-unit">En küçük çip</label>
-          <input type="number" id="b-unit" inputmode="numeric" min="1" step="1" value="${b.unit}"></div>
-        <div class="field"><label for="b-hours">Oyun süresi</label>
-          <select id="b-hours">${HOURS.map(h => `<option value="${h}"${h === b.hours ? ' selected' : ''}>${hoursText(h)}</option>`).join('')}</select></div>
-        <div class="field"><label for="b-start">Başlama saati <span class="hint">· isteğe bağlı</span></label>
-          <input type="time" id="b-start" value="${esc(b.start)}"></div>
-        <div class="field"><span class="label">Başlangıç derinliği</span>
-          ${seg('depth', B.DEPTHS.map(d => ({ value: d, label: `${d} BB` })))}
-          <span class="hint">100 BB daha çok beceri ve uzun oyun, 50 BB daha hızlı oyun.</span></div>
-        <div class="field wide"><span class="label">Artış hızı</span>
-          ${seg('speed', Object.entries(B.SPEEDS).map(([k, v]) => ({ value: k, label: `${v.label} <small>×${B.speedRatio(k).toFixed(2).replace('.', ',')}</small>` })))}
-          <span class="hint">Her seviyede blind'lar ortalama bu oranla çarpılır. Normal: sırayla ×1,5 ve ×4/3, yani iki seviyede bir ikiye katlanır.</span></div>
-      </div>
-    </section>
-    <div id="b-out"></div>
-    ${blindHelpHTML()}`;
-
-  const num = id => Number(document.getElementById(id).value);
-  const save = () => { lsSet(LS_BLINDS, JSON.stringify(b)); updateBlind(); };
-  [['b-players', 'players'], ['b-stack', 'stack'], ['b-unit', 'unit']].forEach(([id, key]) =>
-    document.getElementById(id).addEventListener('input', () => { b[key] = num(id); save(); }));
-  document.getElementById('b-hours').addEventListener('change', () => { b.hours = num('b-hours'); save(); });
-  document.getElementById('b-start').addEventListener('input', e => { b.start = e.target.value; save(); });
-  view.querySelectorAll('[data-seg]').forEach(btn => btn.addEventListener('click', () => {
-    const key = btn.dataset.seg;
-    b[key] = key === 'depth' ? Number(btn.dataset.val) : btn.dataset.val;
-    view.querySelectorAll(`[data-seg="${key}"]`).forEach(x => x.setAttribute('aria-checked', String(x === btn)));
-    save();
-  }));
-  updateBlind();
-}
-
-function blindPlanNow() {
-  const b = state.blinds;
-  return B.blindPlan({ players: b.players, stack: b.stack, unit: b.unit, hours: b.hours, depth: b.depth, speed: b.speed });
-}
-
-function updateBlind() {
-  const out = document.getElementById('b-out');
-  const b = state.blinds;
-  const plan = blindPlanNow();
-  if (plan.errors.length) {
-    out.innerHTML = `<ul class="issues">${plan.errors.map(e => `<li class="err">${esc(e)}</li>`).join('')}</ul>`;
-    return;
-  }
-  const target = plan.levels.find(l => l.kind === 'target');
-  const time = l => B.clock(b.start, l.at);
-  const rows = plan.levels.map(l => `<tr class="${l.kind === 'target' ? 'lead' : l.kind === 'spare' ? 'spare' : ''}">
-      <td class="lv">${l.no}</td>
-      <td class="tm">${time(l)}</td>
-      <td class="bl">${B.fmt(l.sb)}</td>
-      <td class="bl">${B.fmt(l.bb)}</td>
-      <td class="rs">${l.rise == null ? '–' : `+%${Math.round(l.rise * 100)}`}</td>
-      <td class="dp">${l.depth >= 10 ? Math.round(l.depth) : l.depth.toFixed(1).replace('.', ',')}${l.kind === 'target' ? '<span class="tag new">bitiş</span>' : l.kind === 'spare' ? '<span class="tag">yedek</span>' : ''}</td>
-    </tr>`).join('');
-  out.innerHTML = `<section class="block">
-      <dl class="kpis blind-kpis">
-        <div><dt>Başlangıç</dt><dd>${B.fmt(plan.startBB / 2)}/${B.fmt(plan.startBB)}</dd></div>
-        <div><dt>Seviye süresi</dt><dd>${plan.minutes} dk</dd></div>
-        <div><dt>Bitiş seviyesi</dt><dd>${target.no}.</dd></div>
-        <div><dt>Toplam çip</dt><dd>${B.fmt(plan.total)}</dd></div>
-      </dl>
-      <p class="dim" style="margin:0">Herkes ${Math.round(plan.realDepth)} BB ile başlar. Blind'lar ${plan.minutes} dakikada bir artar, ${target.no}. seviyede${b.start ? ` (${time(target)})` : ''} büyük blind ${B.fmt(target.bb)} olur: toplam çipin yaklaşık 1/${B.END_DIVISOR}'si. O noktada iki kişi kalsa bile kişi başı ortalama ${Math.round(plan.total / 2 / target.bb)} BB düşer, oyun birkaç el içinde biter. Uzarsa diye sonuna ${B.SPARE_LEVELS} yedek seviye eklendi. Seviye başına yaklaşık ${Math.round(plan.handsPerLevel)} el oynanır.</p>
-      ${plan.warnings.length ? `<ul class="issues" style="margin:0">${plan.warnings.map(w => `<li class="warn">${esc(w)}</li>`).join('')}</ul>` : ''}
-      <div class="table-wrap"><table class="blinds">
-        <thead><tr><th>Seviye</th><th>${b.start ? 'Saat' : 'Süre'}</th><th>Küçük blind</th><th>Büyük blind</th><th>Artış</th><th>Stack / BB</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>
-      <p class="dim" style="margin:0;font-size:14px">Stack / BB: başlangıç stack'i o seviyede kaç büyük blind eder.${b.start ? '' : ' Süre, oyun başladıktan sonra geçen zamandır.'}</p>
-      <div class="share-actions"><button type="button" class="btn" data-act="blind-copy">Metni kopyala</button></div>
-    </section>`;
-  out.querySelector('[data-act="blind-copy"]').addEventListener('click', () => {
-    const lines = plan.levels.map(l => `${l.no}. ${time(l)} · ${B.fmt(l.sb)}/${B.fmt(l.bb)}${l.kind === 'target' ? ' (bitiş)' : l.kind === 'spare' ? ' (yedek)' : ''}`);
-    const text = `Blindlar · ${b.players} kişi × ${B.fmt(b.stack)} çip · ${plan.minutes} dk seviye\n${lines.join('\n')}`;
-    if (!navigator.clipboard) { toast('Bu tarayıcı kopyalamayı desteklemiyor.'); return; }
-    navigator.clipboard.writeText(text)
-      .then(() => toast('Kopyalandı. WhatsApp\'a yapıştırabilirsin.'), () => toast('Kopyalanamadı.'));
+function pointsDraft() {
+  const places = state.points.places.map(v => (/^\d{1,2}$/.test(v.trim()) ? Number(v) : NaN));
+  const errors = [];
+  const warnings = [];
+  places.forEach((p, i) => {
+    if (Number.isNaN(p)) errors.push(`${i + 1}. sıranın puanı 0–${S.MAX_POINT_VALUE} arası bir tam sayı olmalı.`);
+    else if (i > 0 && p > places[i - 1]) warnings.push(`${i + 1}. sıra ${i}. sıradan fazla puan alıyor.`);
   });
+  if (places[0] === 0) errors.push('1. sıra en az 1 puan almalı.');
+  const clean = errors.length ? null : S.normalizePoints(places);
+  const changed = !!clean && clean.join() !== rules().join();
+  return { clean, errors, warnings, changed };
 }
 
-function blindHelpHTML() {
-  return `<section class="block help">
-      <h2>Nasıl hesaplanıyor</h2>
-      <p>Önemli olan blind'ların kendisi değil, herkesin kaç büyük blind'ı (BB) olduğu. Stack 20 BB'nin üstündeyken normal poker oynanır, 10 BB'nin altına inince oyun "all-in ya da fold"a döner. Blind yapısı, bu oranın akşam boyunca ne hızla düşeceğinin planıdır.</p>
-      <dl class="defs">
-        <dt>Başlangıç</dt><dd>Büyük blind = kişi başı çip ÷ başlangıç derinliği. Küçük blind büyüğün yarısı.</dd>
-        <dt>Bitiş</dt><dd>Toplam çip = oyuncu sayısı × kişi başı çip. Oyunun bitmesi istenen anda büyük blind ≈ toplam çip ÷ ${B.END_DIVISOR} olmalı.</dd>
-        <dt>Artış</dt><dd>Blind'lar toplanarak değil çarpılarak artar. 50→100→150→200 gibi sabit eklemek oyunu başta sert, sonda bitmez yapar; her seviyede ikiye katlamak da piyangoya çevirir.</dd>
-        <dt>Seviye sayısı</dt><dd>ln(oyuncu × derinlik ÷ ${B.END_DIVISOR}) ÷ ln(artış). Kişi başı çip bu formülde sadeleşir: 5.000 ya da 10.000 çip oyunun uzunluğunu değiştirmez, sadece rakamları ölçekler.</dd>
-        <dt>Seviye süresi</dt><dd>Hedef süre ÷ seviye sayısı.</dd>
-        <dt>Yuvarlama</dt><dd>Blind'lar 100, 150, 200, 300, 400, 600, 800 gibi yuvarlak değerlere oturur ve küçük blind her zaman en küçük çipin katıdır.</dd>
-      </dl>
+function renderAyarlar() {
+  const admin = !!token();
+  const saved = rules();
+  if (!state.points || !state.points.dirty) state.points = { places: saved.map(String), dirty: false, busy: false };
+  const f = state.points;
+  const msg = state.pointsMsg ? `<p class="msg ${state.pointsMsg.ok ? 'ok' : 'err'}">${esc(state.pointsMsg.text)}</p>` : '';
+
+  const form = `<div class="panel">
+      <ol class="pt-list">${f.places.map((v, i) => `<li>
+          <label for="s-pt-${i}">${i + 1}. sıra</label>
+          <input type="text" inputmode="numeric" maxlength="2" id="s-pt-${i}" data-pt="${i}" value="${esc(v)}">
+          <span class="dim">puan</span>
+          ${i > 0 && i === f.places.length - 1 ? `<button type="button" class="icon" data-act="pt-remove" aria-label="${i + 1}. sırayı kaldır">✕</button>` : ''}
+        </li>`).join('')}</ol>
+      <p class="dim" style="margin:10px 0 0;font-size:14px">Listede olmayan sıralar puan almaz.</p>
+      <ul class="issues" id="s-issues"></ul>
+      <div class="save-row">
+        <button type="button" class="btn primary" id="s-save">Kaydet</button>
+        ${f.places.length < S.MAX_POINT_PLACES ? '<button type="button" class="btn" data-act="pt-add">Sıra ekle</button>' : ''}
+        ${f.dirty ? '<button type="button" class="btn" data-act="pt-reset">Vazgeç</button>' : ''}
+      </div>
+      <div id="s-msg">${msg}</div>
+    </div>`;
+
+  view.innerHTML = `<section class="page-head">
+      <p class="eyebrow">Yönetim</p><h1>Ayarlar</h1>
+      <p class="lede">Ligin kuralları buradan değişir. Değişiklik herkes için geçerlidir ve geçmiş günler dahil bütün tablolara uygulanır.</p>
+    </section>
+    <section class="block" id="points">
+      <div class="block-head"><h2>Puan sistemi</h2><span class="dim">Şu an: ${esc(S.rulesText(saved))}</span></div>
+      <p class="dim" style="margin:0">Her günün sıralaması çalışma süresine göre oluşur. Aşağıdaki sıralar o gün karşılarındaki puanı alır.</p>
+      ${admin ? form : `${msg}<p class="note">Puan sistemini değiştirmek için bu cihazda yönetici anahtarı kayıtlı olmalı. Anahtarı <a href="#yeni">Yeni Veri</a> sekmesinden girebilirsin.</p>`}
     </section>`;
+  if (!admin) return;
+
+  const refresh = () => {
+    const d = pointsDraft();
+    document.getElementById('s-issues').innerHTML =
+      d.errors.map(e => `<li class="err">${esc(e)}</li>`).join('') + d.warnings.map(w => `<li class="warn">${esc(w)}</li>`).join('');
+    document.getElementById('s-save').disabled = f.busy || !d.changed;
+  };
+  const edit = change => { change(); f.dirty = true; state.pointsMsg = null; render(); };
+  view.querySelectorAll('[data-pt]').forEach(el => el.addEventListener('input', () => {
+    f.places[+el.dataset.pt] = el.value;
+    f.dirty = true;
+    document.getElementById('s-msg').innerHTML = '';
+    state.pointsMsg = null;
+    refresh();
+  }));
+  view.querySelector('[data-act="pt-add"]')?.addEventListener('click', () => {
+    edit(() => f.places.push(''));
+    document.getElementById(`s-pt-${f.places.length - 1}`)?.focus();
+  });
+  view.querySelector('[data-act="pt-remove"]')?.addEventListener('click', () => edit(() => f.places.pop()));
+  view.querySelector('[data-act="pt-reset"]')?.addEventListener('click', () => { state.points = null; state.pointsMsg = null; render(); });
+  document.getElementById('s-save').addEventListener('click', savePoints);
+  refresh();
+}
+
+async function savePoints() {
+  const f = state.points;
+  const d = pointsDraft();
+  if (!d.changed || f.busy) return;
+  const points = d.clean;
+  f.busy = true;
+  const btn = document.getElementById('s-save');
+  btn.disabled = true;
+  btn.textContent = 'Kaydediliyor…';
+  try {
+    await mutate(db => {
+      const before = S.pointRules(db);
+      db.settings = { ...db.settings, points };
+      db.log.push({ at: new Date().toISOString(), action: 'settings', before: { points: before }, after: { points } });
+    }, () => `Puan sistemi değişti: ${S.rulesText(points)}`);
+    state.points = null;
+    state.pointsMsg = { ok: true, text: 'Puan sistemi kaydedildi. Tablolar güncellendi, görseller 1–2 dakika içinde hazır olur.' };
+  } catch (e) {
+    f.busy = false;
+    state.pointsMsg = { ok: false, text: errorText(e) };
+  }
+  render();
 }
 
 // ---------- Yardım ----------
 
 function renderYardim() {
+  const rl = rules();
+  const pts = rl.map((p, i) => `<li><b>${p}</b>${i + 1}.</li>`).join('') + '<li><b>0</b>diğerleri</li>';
   view.innerHTML = `<div class="help">
     <section class="page-head"><p class="eyebrow">Nasıl çalışır</p><h1>Yardım</h1>
-      <p class="lede">Bu sayfadaki her şey girilen oyun sonuçlarından otomatik hesaplanır. Yapılması gereken tek şey her oyundan sonra sıralamayı kaydetmek.</p></section>
+      <p class="lede">Bu sayfadaki her şey girilen çalışma sürelerinden otomatik hesaplanır. Yapılması gereken tek şey her gün kimin ne kadar çalıştığını kaydetmek.</p></section>
 
     <section><h2>Sekmeler</h2>
       <dl class="defs">
-        <dt>Ana Tablo</dt><dd>Bütün zamanların tablosu. Hiç sıfırlanmaz, açılışta toplam puana göre sıralıdır.</dd>
-        <dt>Ligler</dt><dd>Yılda iki lig oynanır: <strong>Kış Ligi</strong> 1 Ekim – 31 Mart, <strong>Yaz Ligi</strong> 1 Nisan – 30 Eylül. Yeni lig kendiliğinden açılır, geçmiş ligler menüde kalır. Açılışta lig puanına göre sıralıdır.</dd>
-        <dt>Oyunlar</dt><dd>Oynanmış her oyunun tam sıralaması; tablo ya da kart görünümüyle. Kazanan ve ilk kaybeden işaretlenir.</dd>
-        <dt>Yeni Veri</dt><dd>Oyuncular ve nickleri, maç kaydı, bütün oyunların listesi, CSV ve değişiklik geçmişi.</dd>
-        <dt>Blindlar</dt><dd>Oyuncu sayısı, çipler ve hedef süreden başlangıç blind'larını ve ne zaman ne kadar artacaklarını hesaplar. Girdiğin değerler bu cihazda hatırlanır.</dd>
+        <dt>Ana Tablo</dt><dd>Bütün zamanların tablosu. Hiç sıfırlanmaz.</dd>
+        <dt>Ligler</dt><dd>Yılda iki lig oynanır: <strong>Kış Ligi</strong> 1 Ekim – 31 Mart, <strong>Yaz Ligi</strong> 1 Nisan – 30 Eylül. Yeni lig kendiliğinden açılır, geçmiş ligler menüde kalır.</dd>
+        <dt>Günler</dt><dd>Kayıtlı her günün sıralaması ve çalışma süreleri.</dd>
+        <dt>Yeni Veri</dt><dd>Üyeler ve nickleri, gün kaydı, bütün günlerin listesi, CSV ve değişiklik geçmişi.</dd>
+        <dt>Ayarlar</dt><dd>Puan sistemi.</dd>
       </dl></section>
 
-    <section><h2>Lig puanı</h2>
-      <ul class="pts"><li><b>N</b>1.</li><li><b>N−2</b>2.</li><li><b>N−4</b>3.</li><li><b>0</b>diğerleri</li></ul>
-      <p>Puan, oyuncu sayısına (N) göre ölçeklenir: 10 kişilik bir oyunu kazanmak, 5 kişilik bir oyunu kazanmaktan daha değerlidir. Kazanan N puan alır, 2. N−2, 3. N−4 (hiç negatif olmaz), geri kalanlar puan almaz. Puanlar, ligin (ya da Ana Tablo'da bütün zamanların) tüm oyunlarında toplanır ve her iki tablo da açılışta bu puana göre sıralıdır. Puan eşitse önce 1.lik, sonra 2.lik, sonra 3.lük sayısı fazla olan öne geçer.</p>
-      <p><strong>İlk kaybeden:</strong> podyuma en yakın ama giremeyen, yani 4. sırada bitiren oyuncu. Puan almaz ama "Detaylı istatistikler" ve <a href="#oyunlar">Oyunlar</a> sayfasında ayrıca işaretlenir.</p></section>
-
-    <section><h2>Sütunlar</h2>
+    <section><h2>Tablo</h2>
       <dl class="defs">
-        <dt>Oyun</dt><dd>Oynadığı oyun sayısı.</dd>
-        <dt>1. · 2. · 3.</dt><dd>Birincilik, ikincilik ve üçüncülük sayısı.</dd>
-        <dt>Kazanma %</dt><dd>Birincilik ÷ oyun.</dd>
-        <dt>Podyum %</dt><dd>İlk üçe girme ÷ oyun.</dd>
-        <dt>Lig puanı</dt><dd>Yukarıdaki puanların toplamı.</dd>
-        <dt>Şans farkı</dt><dd>Gerçek galibiyet ile beklenen galibiyet arasındaki fark. 6 kişilik masada herkesin kazanma şansı 1/6'dır; bu şanslar toplanır ve gerçek galibiyetten çıkarılır. Artı değer beklenenden fazla kazandığını gösterir.</dd>
-        <dt>Form</dt><dd>Son 5 oyundaki sıraları, en yenisi solda. Bu sütuna göre sıralayınca son 5 oyunun puan toplamı esas alınır.</dd>
-        <dt>Rating</dt><dd>Rakiplerin gücünü de hesaba katan beceri puanı (OpenSkill). Herkes 1000 civarından başlar; güçlü bir masada iyi bitirmek daha çok puan getirir. Az oyun oynayanın puanı temkinli tutulur.</dd>
+        <dt>Puan</dt><dd>Kazanılan puanların toplamı. Tablolar açılışta puana göre sıralıdır; puanlar eşitse toplam süresi fazla olan öndedir.</dd>
+        <dt>Toplam süre</dt><dd>Kayıtlı bütün günlerdeki çalışma sürelerinin toplamı.</dd>
+        <dt>Gün başına</dt><dd>Toplam süre ÷ gün sayısı. Gün sayısı, kişinin o tablodaki ilk kaydından itibaren kayıtlı bütün günlerdir: kayıtta olmadığı gün 0 sayılır, katılmadan önceki günler sayılmaz.</dd>
       </dl>
-      <p>Her sütun başlığına dokununca tablo o sütuna göre sıralanır, ikinci dokunuş sırayı ters çevirir. Şans farkı, Form ve Rating "Detaylı istatistikler" düğmesiyle açılıp kapanır.</p></section>
+      <p>Bir sütun başlığına dokununca tablo o sütuna göre sıralanır, ikinci dokunuş sırayı ters çevirir.</p></section>
 
-    <section><h2>Sıralamaya girme</h2>
-      <p>Sıralamaya girmek için o tablodaki toplam oyunların en az <strong>%${S.MIN_SHARE}'unu</strong> oynamış olmak gerekir (yukarı yuvarlanır). Örneğin 10 oyunluk tabloda 3, 20 oyunlukta 6 oyun. Eşik her tablo için ayrı hesaplanır ve oyun sayısı arttıkça yükselir. Daha az oynayanlar tablonun altında ayrı listelenir. Bu, bir kez gelip kazanan birinin en üste çıkmasını önler.</p>
-      <p>Lig başında henüz <strong>${S.MIN_QUALIFIED} kişi</strong> eşiğe ulaşmamışsa herkes aynı tabloda sıralanır; eşik o kişi sayısına ulaşılınca kendiliğinden devreye girer.</p></section>
+    <section><h2>Puan</h2>
+      <ul class="pts">${pts}</ul>
+      <p>Her günün sıralaması çalışma süresine göre oluşur: en çok çalışan 1. olur. Şu anki kural: <strong>${esc(S.rulesText(rl))}</strong>. Kural <a href="#ayarlar">Ayarlar</a> sekmesinden değiştirilebilir; değişiklik geçmiş günlere de uygulanır.</p></section>
 
-    <section><h2>Oyuncular ve nickler</h2>
-      <p>Yeni biri geldiğinde önce <strong>Yeni Veri → Oyuncular</strong> bölümünden ismini ekle. Nick isteğe bağlı; tablolarda ve görsellerde nick görünür, nick boşsa isim görünür. Nick istediğin zaman <strong>Düzenle</strong> ile değiştirilebilir; geçmiş oyunlar etkilenmez. Hiç oyunu olmayan oyuncu silinebilir.</p></section>
+    <section><h2>Üyeler ve nickler</h2>
+      <p>Yeni biri katıldığında önce <strong>Yeni Veri → Üyeler</strong> bölümünden ismini ekle. Nick isteğe bağlı; tablolarda ve görsellerde nick görünür, nick boşsa isim görünür. Nick istediğin zaman <strong>Düzenle</strong> ile değiştirilebilir; geçmiş kayıtlar etkilenmez. Hiç kaydı olmayan üye silinebilir.</p></section>
 
-    <section><h2>Maç kaydetme ve düzeltme</h2>
+    <section><h2>Gün kaydetme ve düzeltme</h2>
       <ol>
-        <li><strong>Yeni Veri → Maç kaydet</strong> bölümünde tarihi seç.</li>
-        <li>Oyunculara bitiş sırasına göre dokun: önce 1., sonra 2. olan… Sıralama sağda puanlarıyla oluşur; ↑ ↓ ile yer değiştirebilir, ✕ ile çıkarabilirsin.</li>
-        <li><strong>Oyunu kaydet</strong>. Tablolar hemen, görseller 1–2 dakika içinde güncellenir.</li>
+        <li><strong>Yeni Veri → Gün kaydet</strong> bölümünde tarihi seç. Her tarih bir kez kaydedilir.</li>
+        <li>O gün çalışan üyelere dokun ve her birinin süresini saat ve dakika olarak yaz. Sıralama süreye göre kendiliğinden oluşur.</li>
+        <li>Aynı süreyi çalışanlar varsa üstteki önde sayılır; ↑ ↓ ile yerlerini değiştirebilirsin.</li>
+        <li><strong>Günü kaydet</strong>. Tablolar hemen, görseller 1–2 dakika içinde güncellenir.</li>
       </ol>
-      <p>Yanlış girilen oyunu <strong>Tüm oyunlar</strong> listesinde <strong>Düzelt</strong> ile değiştirebilir, <strong>Sil</strong> ile kaldırabilirsin. Silinen oyun kaybolmaz, "Silinenleri göster" ile görünür ve <strong>Geri al</strong> ile geri gelir. Geçmiş tarihli oyunlar da girilebilir; doğru lige ve sıraya kendiliğinden yerleşir.</p></section>
+      <p>Yanlış girilen günü <strong>Tüm günler</strong> listesinde <strong>Düzelt</strong> ile değiştirebilir, <strong>Sil</strong> ile kaldırabilirsin. Silinen gün kaybolmaz, "Silinenleri göster" ile görünür ve <strong>Geri al</strong> ile geri gelir. Geçmiş tarihli günler de girilebilir; doğru lige kendiliğinden yerleşir.</p></section>
 
     <section><h2>Görsel ve paylaşım</h2>
       <p>Ana Tablo ve her lig için paylaşmaya hazır bir görsel üretilir. Tablonun üstündeki <strong>Görseli indir</strong> ve <strong>CSV indir</strong> düğmeleri dosyaları indirir. Telefonda <strong>Paylaş</strong> düğmesi görseli ve CSV'yi birlikte WhatsApp'a gönderebilir.</p></section>
 
     <section><h2>Yönetici anahtarı</h2>
-      <p>Veri eklemek için her cihazda bir kez anahtar girmek gerekir. Anahtar sadece o tarayıcıda saklanır, kimseyle paylaşma. Oluşturmak için:</p>
+      <p>Veri eklemek ve ayarları değiştirmek için her cihazda bir kez anahtar girmek gerekir. Anahtar sadece o tarayıcıda saklanır, kimseyle paylaşma. Oluşturmak için:</p>
       <ol>
         <li><strong>72-o</strong> hesabıyla GitHub'a gir ve <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">yeni anahtar sayfasını</a> aç.</li>
         <li><strong>Token name</strong>: <code>Forest Ligi</code>. <strong>Expiration</strong>: en uzun süreyi seç.</li>

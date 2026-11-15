@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "settings": {"points":[1]},
   "players": [
     {"name":"Altay"},
     {"name":"Orhan"},
