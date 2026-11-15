@@ -10,7 +10,7 @@
   ],
   "games": [
     {"id":1,"date":"2026-11-09","players":["Orhan","Altay","Lara","Aslı"],"minutes":[330,180,120,100]},
-    {"id":2,"date":"2026-11-10","players":["Lara","Coşkun","Aslı","Altay"],"minutes":[400,320,300,210]},
+    {"id":2,"date":"2026-11-10","players":["Lara","Coşkun","Aslı","Altay"],"minutes":[400,326,300,210]},
     {"id":3,"date":"2026-11-11","players":["Lara","Orhan","Coşkun","Altay","Aslı"],"minutes":[500,270,150,140,130]},
     {"id":4,"date":"2026-11-12","players":["Coşkun","Aslı","Orhan","Altay"],"minutes":[210,200,120,60]},
     {"id":5,"date":"2026-11-13","players":["Orhan","Altay","Aslı","Lara","Coşkun"],"minutes":[380,310,300,240,70]},
@@ -28,6 +28,7 @@
     {"at":"2026-11-15T13:25:15.762Z","action":"add","id":3,"after":{"date":"2026-11-11","players":["Lara","Orhan","Coşkun","Altay","Aslı"],"minutes":[500,270,150,140,130]}},
     {"at":"2026-11-15T13:26:08.740Z","action":"add","id":4,"after":{"date":"2026-11-12","players":["Coşkun","Aslı","Orhan","Altay"],"minutes":[210,200,120,60]}},
     {"at":"2026-11-15T13:27:10.044Z","action":"add","id":5,"after":{"date":"2026-11-13","players":["Orhan","Altay","Aslı","Lara","Coşkun"],"minutes":[380,310,300,240,70]}},
-    {"at":"2026-11-15T13:28:09.996Z","action":"add","id":6,"after":{"date":"2026-11-14","players":["Lara","Altay","Aslı","Coşkun"],"minutes":[220,120,90,60]}}
+    {"at":"2026-11-15T13:28:09.996Z","action":"add","id":6,"after":{"date":"2026-11-14","players":["Lara","Altay","Aslı","Coşkun"],"minutes":[220,120,90,60]}},
+    {"at":"2026-11-15T13:28:32.437Z","action":"edit","id":2,"before":{"date":"2026-11-10","players":["Lara","Coşkun","Aslı","Altay"],"minutes":[400,320,300,210]},"after":{"date":"2026-11-10","players":["Lara","Coşkun","Aslı","Altay"],"minutes":[400,326,300,210]}}
   ]
 }
