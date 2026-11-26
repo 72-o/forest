@@ -23,7 +23,8 @@
     {"id":12,"date":"2026-11-20","players":["Orhan","Lara","Altay","Aslı"],"minutes":[360,262,180,134]},
     {"id":13,"date":"2026-11-21","players":["Orhan","Lara","Altay","Aslı"],"minutes":[361,278,240,216]},
     {"id":14,"date":"2026-11-22","players":["Lara","Orhan","Altay","Aslı"],"minutes":[247,246,100,76]},
-    {"id":15,"date":"2026-11-23","players":["Orhan","Lara","Aslı"],"minutes":[209,203,28]}
+    {"id":15,"date":"2026-11-23","players":["Orhan","Lara","Aslı"],"minutes":[209,203,28]},
+    {"id":16,"date":"2026-11-24","players":["Coşkun","Aslı","Orhan"],"minutes":[150,131,60]}
   ],
   "log": [
     {"at":"2026-11-10T12:20:56.845Z","action":"player-add","after":{"name":"Altay","nick":""}},
@@ -53,6 +54,7 @@
     {"at":"2026-11-22T15:17:15.900Z","action":"add","id":13,"after":{"date":"2026-11-21","players":["Orhan","Lara"],"minutes":[361,278]}},
     {"at":"2026-11-22T15:55:07.629Z","action":"edit","id":13,"before":{"date":"2026-11-21","players":["Orhan","Lara"],"minutes":[361,278]},"after":{"date":"2026-11-21","players":["Orhan","Lara","Altay","Aslı"],"minutes":[361,278,240,216]}},
     {"at":"2026-11-24T17:01:00.445Z","action":"add","id":14,"after":{"date":"2026-11-22","players":["Lara","Orhan","Altay","Aslı"],"minutes":[247,246,100,76]}},
-    {"at":"2026-11-24T17:01:39.773Z","action":"add","id":15,"after":{"date":"2026-11-23","players":["Orhan","Lara","Aslı"],"minutes":[209,203,28]}}
+    {"at":"2026-11-24T17:01:39.773Z","action":"add","id":15,"after":{"date":"2026-11-23","players":["Orhan","Lara","Aslı"],"minutes":[209,203,28]}},
+    {"at":"2026-11-26T08:51:53.859Z","action":"add","id":16,"after":{"date":"2026-11-24","players":["Coşkun","Aslı","Orhan"],"minutes":[150,131,60]}}
   ]
 }
