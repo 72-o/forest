@@ -26,7 +26,8 @@
     {"id":15,"date":"2026-11-23","players":["Orhan","Lara","Aslı"],"minutes":[209,203,28]},
     {"id":16,"date":"2026-11-24","players":["Coşkun","Aslı","Orhan"],"minutes":[150,131,60]},
     {"id":17,"date":"2026-11-25","players":["Altay","Aslı"],"minutes":[175,88]},
-    {"id":18,"date":"2026-11-26","players":["Orhan"],"minutes":[271]}
+    {"id":18,"date":"2026-11-26","players":["Orhan"],"minutes":[271]},
+    {"id":19,"date":"2026-11-27","players":["Orhan"],"minutes":[270]}
   ],
   "log": [
     {"at":"2026-11-10T12:20:56.845Z","action":"player-add","after":{"name":"Altay","nick":""}},
@@ -59,6 +60,7 @@
     {"at":"2026-11-24T17:01:39.773Z","action":"add","id":15,"after":{"date":"2026-11-23","players":["Orhan","Lara","Aslı"],"minutes":[209,203,28]}},
     {"at":"2026-11-26T08:51:53.859Z","action":"add","id":16,"after":{"date":"2026-11-24","players":["Coşkun","Aslı","Orhan"],"minutes":[150,131,60]}},
     {"at":"2026-11-28T17:39:48.521Z","action":"add","id":17,"after":{"date":"2026-11-25","players":["Altay","Aslı"],"minutes":[175,88]}},
-    {"at":"2026-11-28T17:40:07.588Z","action":"add","id":18,"after":{"date":"2026-11-26","players":["Orhan"],"minutes":[271]}}
+    {"at":"2026-11-28T17:40:07.588Z","action":"add","id":18,"after":{"date":"2026-11-26","players":["Orhan"],"minutes":[271]}},
+    {"at":"2026-11-28T17:40:47.261Z","action":"add","id":19,"after":{"date":"2026-11-27","players":["Orhan"],"minutes":[270]}}
   ]
 }
